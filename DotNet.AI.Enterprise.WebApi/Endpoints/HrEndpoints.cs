@@ -83,6 +83,11 @@ public static class HrEndpoints
                 yield return new SseItem<object>(new TextEvent(update.Text), "text");
         }
 
+        if (assistant.LastSources.Count > 0)
+            yield return new SseItem<object>(
+                new SourcesEvent(assistant.LastSources.Select(s => new SourceDto(s.Chunk.Citation, Math.Round(s.Score, 3))).ToList()),
+                "sources");
+
         yield return new SseItem<object>(
             UsageDto.From(assistant.LastUsage, assistant.SessionUsage, assistant.HistoryCount), "usage");
     }

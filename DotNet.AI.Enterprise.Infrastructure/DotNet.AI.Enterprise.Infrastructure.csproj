@@ -13,5 +13,8 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="Data\Policies\*.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

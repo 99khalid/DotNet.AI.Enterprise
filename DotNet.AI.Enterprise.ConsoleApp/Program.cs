@@ -1,6 +1,7 @@
 using DotNet.AI.Enterprise.Application;
-using DotNet.AI.Enterprise.Infrastructure;
+using DotNet.AI.Enterprise.Application.Rag;
 using DotNet.AI.Enterprise.ConsoleApp.Presentation;
+using DotNet.AI.Enterprise.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -29,6 +30,7 @@ public class Program
 
         using var host = builder.Build();
         await host.StartAsync();
+        await host.Services.GetRequiredService<PolicyIndexer>().IndexAsync();
 
         var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
         await host.Services.GetRequiredService<ChatConsole>().RunAsync(lifetime.ApplicationStopping);

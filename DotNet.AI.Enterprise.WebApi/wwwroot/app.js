@@ -103,6 +103,14 @@ async function send(text) {
           answer += data.delta;
           reply.bubble.innerHTML = renderMarkdown(answer);
           break;
+        case "sources":
+          for (const s of data.sources) {
+            const chip = document.createElement("span");
+            chip.className = "tool";
+            chip.textContent = `📄 ${s.citation} (${s.score})`;
+            reply.tools.appendChild(chip);
+          }
+          break;
         case "usage":
           reply.usage.textContent =
             `in: ${data.inputTokens ?? 0} · out: ${data.outputTokens ?? 0}` +

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using DotNet.AI.Enterprise.Domain;
 using DotNet.AI.Enterprise.Application.Options;
+using DotNet.AI.Enterprise.Application.Rag;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
@@ -17,13 +18,18 @@ public sealed class HrAssistant(
     IEmployeeRepository employees,
     ICurrentUser currentUser,
     TimeProvider time,
-    IOptions<AiOptions> options)
+    IOptions<AiOptions> options,
+    PolicyRetriever retriever,
+    IOptions<RagOptions> ragOptions)
 {
     private readonly AiOptions _options = options.Value;
     private readonly List<ChatMessage> _history = [];
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public UsageDetails? LastUsage { get; private set; }
+
+    /// <summary>Excerpts handed to the model for the last question (Always mode) — shown in the UI.</summary>
+    public IReadOnlyList<PolicySearchResult> LastSources { get; private set; } = [];
     public UsageDetails SessionUsage { get; } = new();
 
     /// <summary>Streams the answer. History is only updated if the whole call succeeds.</summary>
@@ -48,15 +54,26 @@ public sealed class HrAssistant(
     private async IAsyncEnumerable<ChatResponseUpdate> AskCoreAsync(
         string prompt, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        LastSources = [];
         var userMessage = new ChatMessage(ChatRole.User, prompt);
+        var alwaysRetrieve = ragOptions.Value.Mode == RetrievalMode.Always;
+
+        var systemPrompt = Prompts.HrAssistantSystem +
+                           (alwaysRetrieve ? Prompts.ClassicPolicyRules : Prompts.AgenticPolicyRules);
 
         // The model has no memory: every request re-sends system prompt + history + new question.
-        List<ChatMessage> messages = [new(ChatRole.System, Prompts.HrAssistantSystem), .. _history, userMessage];
+        List<ChatMessage> messages = [new(ChatRole.System, systemPrompt), .. _history];
+
+        if (alwaysRetrieve)
+            messages.Add(await BuildPolicyContextAsync(prompt, cancellationToken));
+
+        messages.Add(userMessage);
 
         var chatOptions = new ChatOptions
         {
             Temperature = 0.3f,     // mostly factual, a little natural phrasing
-            Tools = tools.AsAITools()
+            // Always mode: the code already searched, so the model doesn't get the search tool.
+            Tools = tools.AsAITools(includePolicySearch: !alwaysRetrieve)
         };
 
         var updates = new List<ChatResponseUpdate>();
@@ -73,6 +90,26 @@ public sealed class HrAssistant(
 
         LastUsage = response.Usage;
         if (response.Usage is not null) SessionUsage.Add(response.Usage);
+    }
+
+    /// <summary>
+    /// Classic RAG: the code searches on EVERY question and hands the excerpts to the model,
+    /// so a small model never has to decide "should I search?".
+    /// Sent as its own User message right BEFORE the question — not a System message (some chat
+    /// templates, e.g. qwen2.5 on Ollama, drop system messages that aren't first), and not merged
+    /// into the question (the Arabic excerpts would fool LanguagePinningChatClient on English questions).
+    /// Not saved in history: each new question retrieves fresh excerpts.
+    /// </summary>
+    private async Task<ChatMessage> BuildPolicyContextAsync(string question, CancellationToken cancellationToken)
+    {
+        var results = await retriever.SearchAsync(question, cancellationToken);
+        LastSources = results;
+
+        var excerpts = results.Count == 0
+            ? "(No relevant policy excerpts were found.)"
+            : string.Join("\n\n", results.Select(r => $"Source: [{r.Chunk.Citation}]\n{r.Chunk.Text}"));
+
+        return new ChatMessage(ChatRole.User, $"Policy excerpts for my next question:\n\n{excerpts}");
     }
 
     /// <summary>Structured Output: free text in, typed C# object out.</summary>

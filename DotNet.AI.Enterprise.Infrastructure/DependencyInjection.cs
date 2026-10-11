@@ -1,12 +1,14 @@
-using System.ClientModel;
 using DotNet.AI.Enterprise.Application;
 using DotNet.AI.Enterprise.Application.Options;
+using DotNet.AI.Enterprise.Application.Rag;
+using DotNet.AI.Enterprise.Infrastructure.Rag;
 using Google.GenAI.Types;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using OpenAI;
+using System.ClientModel;
 
 namespace DotNet.AI.Enterprise.Infrastructure;
 
@@ -20,14 +22,56 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddAiChatClient(configuration);
-
+        services.AddPolicyRag(configuration);
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IEmployeeRepository, InMemoryEmployeeRepository>();
         services.AddSingleton<ICurrentUser, DemoCurrentUser>();
 
         return services;
     }
+    private static IServiceCollection AddPolicyRag(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<EmbeddingOptions>()
+            .Bind(configuration.GetSection(EmbeddingOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
+        services.AddOptions<RagOptions>()
+            .Bind(configuration.GetSection(RagOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Same idea as AddChatClient: an abstraction (IEmbeddingGenerator) + a middleware pipeline.
+        services
+            .AddEmbeddingGenerator(sp => CreateEmbeddingGenerator(
+                sp.GetRequiredService<IOptions<EmbeddingOptions>>().Value,
+                sp.GetRequiredService<IOptions<AiOptions>>().Value))
+            .UseLogging();
+
+        services.AddSingleton<IPolicyStore, InMemoryPolicyStore>();
+        services.AddSingleton<IPolicyDocumentSource, FilePolicyDocumentSource>();
+
+        return services;
+    }
+
+    private static IEmbeddingGenerator<string, Embedding<float>> CreateEmbeddingGenerator(EmbeddingOptions options, AiOptions ai)
+    {
+        var apiKey = string.IsNullOrWhiteSpace(options.ApiKey) ? ai.ApiKey : options.ApiKey;
+
+        return options.Provider switch
+        {
+            AiProvider.Gemini => new Google.GenAI.Client(apiKey: apiKey)
+                .AsIEmbeddingGenerator(options.Model, options.Dimensions),
+
+            AiProvider.OpenAICompatible => new OpenAIClient(
+                    new ApiKeyCredential(string.IsNullOrWhiteSpace(apiKey) ? "unused" : apiKey),
+                    new OpenAIClientOptions { Endpoint = new Uri(options.Endpoint!) })
+                .GetEmbeddingClient(options.Model)
+                .AsIEmbeddingGenerator(options.Dimensions),
+
+            _ => throw new NotSupportedException($"Embedding provider '{options.Provider}' is not supported.")
+        };
+    }
     private static IServiceCollection AddAiChatClient(this IServiceCollection services, IConfiguration configuration)
     {
         services

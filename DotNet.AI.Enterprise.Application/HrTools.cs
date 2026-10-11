@@ -1,6 +1,7 @@
-using System.ComponentModel;
+using DotNet.AI.Enterprise.Application.Rag;
 using DotNet.AI.Enterprise.Domain;
 using Microsoft.Extensions.AI;
+using System.ComponentModel;
 
 namespace DotNet.AI.Enterprise.Application;
 
@@ -9,16 +10,27 @@ namespace DotNet.AI.Enterprise.Application;
 /// does, inside our process, with our permissions. The [Description] text is what the model reads
 /// to decide when to call each tool, so it is effectively part of the prompt.
 /// </summary>
-public sealed class HrTools(IEmployeeRepository employees, ICurrentUser currentUser, TimeProvider time)
+public sealed class HrTools(
+    IEmployeeRepository employees,
+    ICurrentUser currentUser,
+    TimeProvider time,
+    PolicyRetriever retriever)
 {
-    public IList<AITool> AsAITools() =>
-    [
-        AIFunctionFactory.Create(GetCurrentDate),
-        AIFunctionFactory.Create(GetMyProfile),
-        AIFunctionFactory.Create(GetMyLeaveBalance),
-        AIFunctionFactory.Create(GetPublicHolidays),
-        AIFunctionFactory.Create(GetLeavePolicy),
-    ];
+    public IList<AITool> AsAITools(bool includePolicySearch = true)
+    {
+        List<AITool> tools =
+        [
+            AIFunctionFactory.Create(GetCurrentDate),
+            AIFunctionFactory.Create(GetMyProfile),
+            AIFunctionFactory.Create(GetMyLeaveBalance),
+            AIFunctionFactory.Create(GetPublicHolidays),
+        ];
+
+        if (includePolicySearch)
+            tools.Add(AIFunctionFactory.Create(SearchPolicies));
+
+        return tools;
+    }
 
     [Description("Returns today's date and day of week. Use it to resolve relative dates like 'tomorrow' or 'next Sunday'.")]
     public string GetCurrentDate()
@@ -44,11 +56,30 @@ public sealed class HrTools(IEmployeeRepository employees, ICurrentUser currentU
     }
 
     // No employeeId parameter on purpose: identity comes from ICurrentUser, not from the model.
-    [Description("Returns the current employee's remaining leave balance in days. Only works for the logged-in employee.")]
+    // The Arabic examples help small models map colloquial words ("عطلة", "فاضلي") to this tool.
+    [Description("Returns the current employee's remaining leave balance in days (annual and sick). " +
+                 "Use it for questions like: رصيدي كام، فاضلي كام يوم إجازة، عندي كام يوم عطلة، كام يوم أجازة باقيلي.")]
     public object GetMyLeaveBalance()
     {
         var me = GetCurrentEmployee();
         return new { AnnualDays = me.AnnualLeaveBalance, SickDays = me.SickLeaveBalance };
+    }
+
+    // RAG: the policy text now comes from documents, not from code.
+    [Description("Searches the company's HR policy documents (leave, attendance, remote work, permissions...). " +
+                 "Use it for ANY question about rules or policies. Returns the most relevant excerpts with their source.")]
+    public async Task<object> SearchPolicies(
+        [Description("What to search for, as a short phrase in the employee's language.")] string query,
+        CancellationToken cancellationToken)
+    {
+        var results = await retriever.SearchAsync(query, cancellationToken);
+
+        if (results.Count == 0)
+            return "No relevant policy was found for this question.";
+
+        return results
+            .Select(r => new { Source = r.Chunk.Citation, r.Chunk.Text, Score = Math.Round(r.Score, 3) })
+            .ToList();
     }
     [Description("Returns the list of public holidays for the current year.")]
     public object GetPublicHolidays()
@@ -77,16 +108,6 @@ public sealed class HrTools(IEmployeeRepository employees, ICurrentUser currentU
             Holidays = publicHolidays
         };
     }
-
-    // Hard-coded for now — in the RAG stage this comes from the company's real policy documents.
-    [Description("Returns the company policy for a given leave type.")]
-    public string GetLeavePolicy([Description("The leave type to look up.")] LeaveType type) => type switch
-    {
-        LeaveType.Annual => "21 days per year (30 after 10 years of service). Request at least 7 days in advance. Max 10 consecutive days without director approval.",
-        LeaveType.Sick => "Up to 15 days per year. A medical certificate is required for more than 2 consecutive days.",
-        LeaveType.Unpaid => "Up to 30 days per year, requires manager and HR approval.",
-        _ => "No specific policy. Contact HR at hr@company.example."
-    };
 
     private Employee GetCurrentEmployee() =>
         employees.GetById(currentUser.EmployeeId)

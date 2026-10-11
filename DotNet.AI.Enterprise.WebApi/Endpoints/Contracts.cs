@@ -28,3 +28,7 @@ public sealed record ToolCallEvent(string Name, IDictionary<string, object?>? Ar
 public sealed record TextEvent(string Delta);
 
 public sealed record ErrorEvent(string Message);
+
+public sealed record SourceDto(string Citation, double Score);
+
+public sealed record SourcesEvent(IReadOnlyList<SourceDto> Sources);
