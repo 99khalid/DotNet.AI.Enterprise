@@ -6,7 +6,10 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 ## Features
 
 - **Provider-agnostic AI** via `Microsoft.Extensions.AI` (`IChatClient`) — switch between **Google Gemini** and any **OpenAI-compatible** endpoint (OpenAI, **Ollama** for local models) from configuration only.
-- **Function calling** — the model asks for `GetMyLeaveBalance`, `GetMyProfile`, `GetLeavePolicy`, `GetPublicHolidays`, `GetCurrentDate`; the app runs them. Identity comes from `ICurrentUser`, never from model-supplied parameters.
+- **Function calling** — the model asks for `GetMyLeaveBalance`, `GetMyProfile`, `GetPublicHolidays`, `GetCurrentDate`, `SearchPolicies`; the app runs them. Identity comes from `ICurrentUser`, never from model-supplied parameters.
+- **RAG over HR policy documents** — Markdown policies are chunked per article (with a contextual header), embedded via `IEmbeddingGenerator` (Gemini or Ollama `bge-m3`), and searched by cosine similarity. Answers cite their source, e.g. `[سياسة الإجازات › المادة 1: الإجازة السنوية]`.
+  - **Two retrieval modes**: `Agentic` (the model decides when to call `SearchPolicies`) and `Always` (classic RAG — the code retrieves on every question; more reliable with small models).
+  - **Score threshold** (`MinScore`) so the code itself can say "not found", plus retrieval logging of every candidate and its score.
 - **Structured output** — free text → `LeaveRequestDraft` record, then business rules (balance, 7-day notice, past dates) are validated in code.
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
@@ -16,8 +19,8 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 
 ```
 DotNet.AI.Enterprise.Domain          Business rules (Employee, LeaveType, LeaveRequestDraft) — no AI
-DotNet.AI.Enterprise.Application     HrAssistant, HrTools, Prompts, AiOptions, middleware
-DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, data access, DI wiring
+DotNet.AI.Enterprise.Application     HrAssistant, HrTools, Prompts, options, middleware, Rag/ (chunking, indexing, retrieval)
+DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector store, policy documents (Data/Policies), DI wiring
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
 ```
@@ -39,6 +42,7 @@ dotnet run --project DotNet.AI.Enterprise.WebApi --launch-profile Gemini
 
 ```bash
 ollama pull qwen2.5:3b
+ollama pull bge-m3
 dotnet run --project DotNet.AI.Enterprise.WebApi --launch-profile Ollama
 ```
 
@@ -63,18 +67,39 @@ dotnet run --project DotNet.AI.Enterprise.ConsoleApp
 | `TimeoutSeconds` | Request timeout |
 | `MaxHistoryMessages` | Chat history kept per conversation (bounds context size and cost) |
 
+`Embedding` section — the embedding model, independent from the chat model:
+
+| Key | Description |
+|---|---|
+| `Provider` / `Model` / `Endpoint` | Same meaning as above, e.g. `gemini-embedding-001` or `bge-m3` |
+| `ApiKey` | Optional — falls back to `AI:ApiKey` |
+| `Dimensions` | Optional vector size; null = model default |
+
+`Rag` section:
+
+| Key | Description |
+|---|---|
+| `DocumentsPath` | Folder of policy `.md` files (one `## ` heading per chunk) |
+| `TopK` | Chunks returned per search |
+| `Mode` | `Agentic` or `Always` |
+| `MinScore` | Cosine-similarity cutoff. **Model-specific** — calibrate it from the retrieval log when changing the embedding model |
+
+The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge-m3`, `Mode = Always`, `MinScore = 0.40`.
+
 ## Roadmap
 
 - [x] LLM fundamentals: prompts, tokens, temperature, structured output, function calling
 - [x] AI + .NET: `Microsoft.Extensions.AI`, ASP.NET Core, streaming
-- [ ] Embeddings + vector database
-- [ ] RAG over company policy documents (with citations)
+- [x] Embeddings + in-memory vector store
+- [x] RAG over company policy documents (with citations)
+- [ ] Persistent vector database (pgvector / Qdrant)
 - [ ] Agents with Microsoft Agent Framework
 - [ ] MCP server
-- [ ] Advanced RAG + evaluation
+- [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
 - [ ] Production: auth, persistence, Docker, observability
 
 ## Notes
 
 - Demo data and a fixed demo user (`DemoCurrentUser`) stand in for a real database and authentication.
+- The vector store is in memory: documents are re-embedded on every startup.
 - Check each model's license before commercial use (e.g. `qwen2.5:3b` is research/non-commercial only).
