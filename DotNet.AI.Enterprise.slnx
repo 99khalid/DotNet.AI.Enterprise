@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="DotNet.AI.Enterprise.Application/DotNet.AI.Enterprise.Application.csproj" />
+  <Project Path="DotNet.AI.Enterprise.ConsoleApp/DotNet.AI.Enterprise.ConsoleApp.csproj" />
+  <Project Path="DotNet.AI.Enterprise.Domain/DotNet.AI.Enterprise.Domain.csproj" />
+  <Project Path="DotNet.AI.Enterprise.Infrastructure/DotNet.AI.Enterprise.Infrastructure.csproj" />
+  <Project Path="DotNet.AI.Enterprise.WebApi/DotNet.AI.Enterprise.WebApi.csproj" />
+</Solution>

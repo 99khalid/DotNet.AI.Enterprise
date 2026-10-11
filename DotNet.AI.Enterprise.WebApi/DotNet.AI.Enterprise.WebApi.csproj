@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- Shared with the ConsoleApp project so both read the same AI:ApiKey secret. -->
+    <UserSecretsId>e93bc397-ec59-4fe2-9b3a-51f5b50035ee</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DotNet.AI.Enterprise.Infrastructure\DotNet.AI.Enterprise.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

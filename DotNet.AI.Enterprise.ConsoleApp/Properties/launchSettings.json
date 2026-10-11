@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "DotNet.AI.Enterprise.ConsoleApp": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

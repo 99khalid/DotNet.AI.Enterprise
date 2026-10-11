@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HR Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">🧑‍💼</span>
+      <div>
+        <h1>HR Assistant</h1>
+        <p class="sub" id="who">…</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="badge" id="model" title="AI provider / model">…</span>
+      <button class="btn ghost" id="newChat" type="button">محادثة جديدة</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Chat: streaming + tool calls + tokens -->
+    <section class="panel chat" aria-label="Chat">
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="empty" id="empty">
+          <p>اسأل عن إجازاتك أو سياسات الشركة. جرّب:</p>
+          <div class="chips" id="suggestions"></div>
+        </div>
+      </div>
+
+      <form class="composer" id="chatForm">
+        <textarea id="input" rows="1" dir="auto" placeholder="اكتب سؤالك…" maxlength="4000" required></textarea>
+        <button class="btn primary" id="send" type="submit">إرسال</button>
+      </form>
+    </section>
+
+    <!-- Structured Output: free text → typed leave request -->
+    <aside class="panel leave" aria-label="Leave request extraction">
+      <h2>طلب إجازة <span class="tag">Structured Output</span></h2>
+      <form id="leaveForm">
+        <textarea id="leaveText" rows="3" dir="auto" maxlength="4000"
+                  placeholder="مثال: عايز إجازة سنوية من 1 نوفمبر لـ 3 نوفمبر علشان فرح أخويا" required></textarea>
+        <button class="btn primary" id="leaveBtn" type="submit">استخرج الطلب</button>
+      </form>
+      <div id="leaveResult" class="leave-result" hidden></div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

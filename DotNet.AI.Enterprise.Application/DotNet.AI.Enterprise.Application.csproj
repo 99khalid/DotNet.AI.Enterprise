@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Use cases (HrAssistant, tools, prompts). Depends on IChatClient, never on a concrete provider. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\DotNet.AI.Enterprise.Domain\DotNet.AI.Enterprise.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

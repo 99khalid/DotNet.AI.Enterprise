@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure business rules: no AI SDKs, no infrastructure. -->
+
+</Project>
