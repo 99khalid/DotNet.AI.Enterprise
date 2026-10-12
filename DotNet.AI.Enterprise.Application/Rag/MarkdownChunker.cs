@@ -12,7 +12,6 @@ public static class MarkdownChunker
     {
         string? section = null;
         var body = new StringBuilder();
-        var index = 0;
 
         foreach (var rawLine in document.Content.Split('\n'))
         {
@@ -24,7 +23,7 @@ public static class MarkdownChunker
             if (line.StartsWith("## "))
             {
                 if (section is not null && body.Length > 0)
-                    yield return new PolicyChunk($"{document.Title}#{index++}", document.Title, section, body.ToString().Trim());
+                    yield return new PolicyChunk(ChunkId(document.Title, section), document.Title, section, body.ToString().Trim());
 
                 section = line[3..].Trim();
                 body.Clear();
@@ -36,6 +35,9 @@ public static class MarkdownChunker
         }
 
         if (section is not null && body.Length > 0)
-            yield return new PolicyChunk($"{document.Title}#{index}", document.Title, section, body.ToString().Trim());
+            yield return new PolicyChunk(ChunkId(document.Title, section), document.Title, section, body.ToString().Trim());
     }
+    // Stable id = document + article title. A position-based id ("#3") would change for every
+    // article after an inserted one, and incremental indexing would re-embed all of them.
+    private static string ChunkId(string documentTitle, string section) => $"{documentTitle} › {section}";
 }

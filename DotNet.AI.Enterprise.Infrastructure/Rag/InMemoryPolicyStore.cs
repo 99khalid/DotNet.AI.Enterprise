@@ -5,19 +5,26 @@ using DotNet.AI.Enterprise.Application.Rag;
 namespace DotNet.AI.Enterprise.Infrastructure.Rag;
 
 /// <summary>
-/// A vector store in ~20 lines: keep every vector in memory and compare the query against ALL of them.
-/// Fine for hundreds of chunks. Real vector databases use an index (e.g. HNSW) to avoid
-/// comparing against everything when there are millions.
+/// A vector store in ~30 lines: keep every vector in memory and compare the query against ALL of them.
+/// Fine for hundreds of chunks. Lost on restart, so everything is re-embedded on every start.
 /// </summary>
 public sealed class InMemoryPolicyStore : IPolicyStore
 {
-    private readonly ConcurrentDictionary<string, (PolicyChunk Chunk, ReadOnlyMemory<float> Vector)> _items = new();
+    private readonly ConcurrentDictionary<string, (PolicyChunk Chunk, string Hash, ReadOnlyMemory<float> Vector)> _items = new();
 
-    public int Count => _items.Count;
+    public Task<IReadOnlyDictionary<string, string>> GetContentHashesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<string, string>>(_items.ToDictionary(i => i.Key, i => i.Value.Hash));
 
-    public Task UpsertAsync(PolicyChunk chunk, ReadOnlyMemory<float> vector, CancellationToken cancellationToken = default)
+    public Task UpsertAsync(PolicyChunk chunk, string contentHash, ReadOnlyMemory<float> vector, CancellationToken cancellationToken = default)
     {
-        _items[chunk.Id] = (chunk, vector);
+        _items[chunk.Id] = (chunk, contentHash, vector);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(IEnumerable<string> ids, CancellationToken cancellationToken = default)
+    {
+        foreach (var id in ids)
+            _items.TryRemove(id, out _);
         return Task.CompletedTask;
     }
 

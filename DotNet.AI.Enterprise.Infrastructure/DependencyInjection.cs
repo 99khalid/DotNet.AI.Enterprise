@@ -48,7 +48,20 @@ public static class DependencyInjection
                 sp.GetRequiredService<IOptions<AiOptions>>().Value))
             .UseLogging();
 
-        services.AddSingleton<IPolicyStore, InMemoryPolicyStore>();
+        // The only place that changes between stores — Application never knows which one is used.
+        var rag = configuration.GetSection(RagOptions.SectionName).Get<RagOptions>() ?? new RagOptions();
+        if (rag.Store == PolicyStoreKind.Postgres)
+        {
+            var connectionString = configuration.GetConnectionString("Policies")
+                ?? throw new InvalidOperationException("ConnectionStrings:Policies is required when Rag:Store is Postgres.");
+
+            services.AddPostgresVectorStore(connectionString);
+            services.AddSingleton<IPolicyStore, PgVectorPolicyStore>();
+        }
+        else
+        {
+            services.AddSingleton<IPolicyStore, InMemoryPolicyStore>();
+        }
         services.AddSingleton<IPolicyDocumentSource, FilePolicyDocumentSource>();
 
         return services;

@@ -24,6 +24,7 @@
         "Embedding__Provider": "OpenAICompatible",
         "Embedding__Model": "bge-m3",
         "Embedding__Endpoint": "http://localhost:11434/v1",
+        "Embedding__Dimensions": "1024",
         "Rag__Mode": "Always",
         "Rag__MinScore": "0.40"
       }

@@ -26,10 +26,21 @@ public sealed class RagOptions
     /// </summary>
     [Range(0.0, 1.0)]
     public double MinScore { get; init; } = 0.55;
+    /// <summary>
+    /// InMemory = re-embeds everything on every start (no setup needed).
+    /// Postgres = pgvector; vectors persist, only changed chunks are re-embedded.
+    /// Postgres needs ConnectionStrings:Policies and Embedding:Dimensions.
+    /// </summary>
+    public PolicyStoreKind Store { get; init; } = PolicyStoreKind.InMemory;
 }
 
 public enum RetrievalMode
 {
     Agentic,
     Always
+}
+public enum PolicyStoreKind
+{
+    InMemory,
+    Postgres
 }

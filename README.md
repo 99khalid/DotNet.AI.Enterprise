@@ -10,6 +10,9 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 - **RAG over HR policy documents** — Markdown policies are chunked per article (with a contextual header), embedded via `IEmbeddingGenerator` (Gemini or Ollama `bge-m3`), and searched by cosine similarity. Answers cite their source, e.g. `[سياسة الإجازات › المادة 1: الإجازة السنوية]`.
   - **Two retrieval modes**: `Agentic` (the model decides when to call `SearchPolicies`) and `Always` (classic RAG — the code retrieves on every question; more reliable with small models).
   - **Score threshold** (`MinScore`) so the code itself can say "not found", plus retrieval logging of every candidate and its score.
+- **Persistent vector store** — PostgreSQL + **pgvector** through `Microsoft.Extensions.VectorData`, with an HNSW index. Swappable with the in-memory store from configuration; the Application layer doesn't change.
+  - **Incremental indexing** — each chunk stores a SHA-256 hash of its text; on startup only new or changed chunks are embedded, and removed ones are deleted.
+  - **One table per embedding model and size** (e.g. `policy_chunks_bge_m3_1024`), so vectors from different models are never mixed.
 - **Structured output** — free text → `LeaveRequestDraft` record, then business rules (balance, 7-day notice, past dates) are validated in code.
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
@@ -20,7 +23,7 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 ```
 DotNet.AI.Enterprise.Domain          Business rules (Employee, LeaveType, LeaveRequestDraft) — no AI
 DotNet.AI.Enterprise.Application     HrAssistant, HrTools, Prompts, options, middleware, Rag/ (chunking, indexing, retrieval)
-DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector store, policy documents (Data/Policies), DI wiring
+DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector stores (in-memory, pgvector), policy documents (Data/Policies), DI wiring
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
 ```
@@ -29,7 +32,16 @@ Dependencies point inward: `Presentation → Infrastructure → Application → 
 
 ## Getting started
 
-Requirements: .NET 10 SDK, and either a Gemini API key or [Ollama](https://ollama.com).
+Requirements: .NET 10 SDK, Docker, and either a Gemini API key or [Ollama](https://ollama.com).
+
+### PostgreSQL + pgvector
+
+```bash
+docker run -d --name hr-postgres -e POSTGRES_PASSWORD=dev-password -e POSTGRES_DB=hr -p 5432:5432 -v hr-pgdata:/var/lib/postgresql/data pgvector/pgvector:pg17
+dotnet user-secrets set "ConnectionStrings:Policies" "Host=localhost;Port=5432;Database=hr;Username=postgres;Password=dev-password" --project DotNet.AI.Enterprise.WebApi
+```
+
+The table and its HNSW index are created on first run. To run without Docker, set `Rag:Store` to `InMemory`.
 
 ### Gemini
 
@@ -73,7 +85,7 @@ dotnet run --project DotNet.AI.Enterprise.ConsoleApp
 |---|---|
 | `Provider` / `Model` / `Endpoint` | Same meaning as above, e.g. `gemini-embedding-001` or `bge-m3` |
 | `ApiKey` | Optional — falls back to `AI:ApiKey` |
-| `Dimensions` | Optional vector size; null = model default |
+| `Dimensions` | Vector size. **Required for the Postgres store** — e.g. `1024` for `bge-m3`, `1536` for `gemini-embedding-001` (pgvector's HNSW index supports up to 2000) |
 
 `Rag` section:
 
@@ -83,8 +95,9 @@ dotnet run --project DotNet.AI.Enterprise.ConsoleApp
 | `TopK` | Chunks returned per search |
 | `Mode` | `Agentic` or `Always` |
 | `MinScore` | Cosine-similarity cutoff. **Model-specific** — calibrate it from the retrieval log when changing the embedding model |
+| `Store` | `Postgres` (needs `ConnectionStrings:Policies` and `Embedding:Dimensions`) or `InMemory` |
 
-The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge-m3`, `Mode = Always`, `MinScore = 0.40`.
+The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge-m3` (1024 dimensions), `Mode = Always`, `MinScore = 0.40`.
 
 ## Roadmap
 
@@ -92,7 +105,7 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] AI + .NET: `Microsoft.Extensions.AI`, ASP.NET Core, streaming
 - [x] Embeddings + in-memory vector store
 - [x] RAG over company policy documents (with citations)
-- [ ] Persistent vector database (pgvector / Qdrant)
+- [x] Persistent vector database (PostgreSQL + pgvector, incremental indexing)
 - [ ] Agents with Microsoft Agent Framework
 - [ ] MCP server
 - [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
@@ -101,5 +114,4 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 ## Notes
 
 - Demo data and a fixed demo user (`DemoCurrentUser`) stand in for a real database and authentication.
-- The vector store is in memory: documents are re-embedded on every startup.
 - Check each model's license before commercial use (e.g. `qwen2.5:3b` is research/non-commercial only).
