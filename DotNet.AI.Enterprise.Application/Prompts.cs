@@ -27,7 +27,7 @@ public static class Prompts
     public const string ClassicPolicyRules = """
 
         Policies:
-        - Before the employee's question you receive a message with "Policy excerpts". Use them for policy or rules questions.
+        - At the end of these instructions you receive "Policy excerpts" found for the employee's current question. Use them for policy or rules questions.
         - Put the source after each policy fact, exactly as given, e.g. [سياسة الإجازات › المادة 1: الإجازة السنوية].
         - If the excerpts don't answer the question, say the policies don't cover it and suggest contacting HR at hr@company.example.
         """;

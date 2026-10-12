@@ -7,12 +7,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.VectorData.PgVector" Version="1.0.1" />
     <PackageReference Include="Google.GenAI" Version="1.25.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
-    <PackageReference Include="Microsoft.SemanticKernel.Connectors.PgVector" Version="1.74.0-preview" />
   </ItemGroup>
   <ItemGroup>
     <None Update="Data\Policies\*.md" CopyToOutputDirectory="PreserveNewest" />

@@ -6,11 +6,12 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 ## Features
 
 - **Provider-agnostic AI** via `Microsoft.Extensions.AI` (`IChatClient`) — switch between **Google Gemini** and any **OpenAI-compatible** endpoint (OpenAI, **Ollama** for local models) from configuration only.
+- **Agent built with Microsoft Agent Framework** — `ChatClientAgent` on top of the same `IChatClient`: instructions, tools, a per-conversation `AgentSession`, chat history with a message-count reducer, and classic RAG as an `AIContextProvider`.
 - **Function calling** — the model asks for `GetMyLeaveBalance`, `GetMyProfile`, `GetPublicHolidays`, `GetCurrentDate`, `SearchPolicies`; the app runs them. Identity comes from `ICurrentUser`, never from model-supplied parameters.
 - **RAG over HR policy documents** — Markdown policies are chunked per article (with a contextual header), embedded via `IEmbeddingGenerator` (Gemini or Ollama `bge-m3`), and searched by cosine similarity. Answers cite their source, e.g. `[سياسة الإجازات › المادة 1: الإجازة السنوية]`.
-  - **Two retrieval modes**: `Agentic` (the model decides when to call `SearchPolicies`) and `Always` (classic RAG — the code retrieves on every question; more reliable with small models).
+  - **Two retrieval modes**: `Agentic` (the model decides when to call `SearchPolicies`) and `Always` (classic RAG — `PolicyContextProvider` retrieves on every question and adds the excerpts to the agent's instructions; more reliable with small models).
   - **Score threshold** (`MinScore`) so the code itself can say "not found", plus retrieval logging of every candidate and its score.
-- **Persistent vector store** — PostgreSQL + **pgvector** through `Microsoft.Extensions.VectorData`, with an HNSW index. Swappable with the in-memory store from configuration; the Application layer doesn't change.
+- **Persistent vector store** — PostgreSQL + **pgvector** through `Microsoft.Extensions.VectorData` (`CommunityToolkit.VectorData.PgVector` connector), with an HNSW index. Swappable with the in-memory store from configuration; the Application layer doesn't change.
   - **Incremental indexing** — each chunk stores a SHA-256 hash of its text; on startup only new or changed chunks are embedded, and removed ones are deleted.
   - **One table per embedding model and size** (e.g. `policy_chunks_bge_m3_1024`), so vectors from different models are never mixed.
 - **Structured output** — free text → `LeaveRequestDraft` record, then business rules (balance, 7-day notice, past dates) are validated in code.
@@ -22,7 +23,7 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 
 ```
 DotNet.AI.Enterprise.Domain          Business rules (Employee, LeaveType, LeaveRequestDraft) — no AI
-DotNet.AI.Enterprise.Application     HrAssistant, HrTools, Prompts, options, middleware, Rag/ (chunking, indexing, retrieval)
+DotNet.AI.Enterprise.Application     HrAssistant (agent), HrTools, Prompts, options, middleware, Rag/ (chunking, indexing, retrieval, context provider)
 DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector stores (in-memory, pgvector), policy documents (Data/Policies), DI wiring
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
@@ -106,7 +107,9 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] Embeddings + in-memory vector store
 - [x] RAG over company policy documents (with citations)
 - [x] Persistent vector database (PostgreSQL + pgvector, incremental indexing)
-- [ ] Agents with Microsoft Agent Framework
+- [x] Agent with Microsoft Agent Framework (session, history reducer, RAG context provider)
+- [ ] Human-in-the-loop tool approval (`SubmitLeaveRequest`)
+- [ ] Workflows and multi-agent (triage → policy / leave agents)
 - [ ] MCP server
 - [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
 - [ ] Production: auth, persistence, Docker, observability
