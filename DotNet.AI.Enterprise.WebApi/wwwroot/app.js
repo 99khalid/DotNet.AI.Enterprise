@@ -77,16 +77,23 @@ async function send(text) {
   inputEl.style.height = "auto";
 
   addMessage("user").bubble.textContent = text;
+  await streamReply(`/api/conversations/${conversationId}/messages`, { message: text });
+}
+
+/** Sends a request and streams the agent's reply (text, tools, sources, approvals) into a new message. */
+async function streamReply(url, payload) {
+  setBusy(true);
   const reply = addMessage("assistant");
   reply.bubble.classList.add("typing");
 
   let answer = "";
+  let pausedForApproval = false;
 
   try {
-    const res = await fetch(`/api/conversations/${conversationId}/messages`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -98,6 +105,10 @@ async function send(text) {
       switch (event) {
         case "tool":
           addToolChip(reply, data);
+          break;
+        case "approval":
+          pausedForApproval = true;
+          addApprovalCard(reply, data);
           break;
         case "text":
           answer += data.delta;
@@ -126,7 +137,8 @@ async function send(text) {
     showError(reply, err.message);
   } finally {
     reply.bubble.classList.remove("typing");
-    if (!answer && !reply.el.querySelector(".error-box")) reply.bubble.textContent = "—";
+    if (!answer && pausedForApproval) reply.bubble.textContent = "⏸️ محتاج موافقتك قبل التنفيذ:";
+    else if (!answer && !reply.el.querySelector(".error-box")) reply.bubble.textContent = "—";
     setBusy(false);
     inputEl.focus();
   }
@@ -186,6 +198,73 @@ function addToolChip(reply, call) {
   const args = call.arguments && Object.keys(call.arguments).length ? JSON.stringify(call.arguments) : "";
   chip.textContent = `🔧 ${call.name}(${args})`;
   reply.tools.appendChild(chip);
+}
+
+const LEAVE_TYPES = { Annual: "سنوية", Sick: "مرضية", Unpaid: "بدون أجر", Other: "أخرى" };
+
+/**
+ * Human-in-the-loop card. Shows the EXACT arguments the agent will run with — not the model's
+ * own description of them — so the employee approves what really happens.
+ */
+function addApprovalCard(reply, approval) {
+  const card = document.createElement("div");
+  card.className = "approval";
+
+  const title = document.createElement("div");
+  title.className = "approval-title";
+  title.textContent = approval.toolName === "SubmitLeaveRequest" ? "📝 تقديم طلب إجازة" : `🔧 ${approval.toolName}`;
+  card.appendChild(title);
+
+  const args = approval.arguments ?? {};
+  const rows = approval.toolName === "SubmitLeaveRequest"
+    ? [
+        ["النوع", LEAVE_TYPES[args.type] ?? args.type],
+        ["من", args.startDate],
+        ["إلى", args.endDate],
+        ["عدد الأيام", daysBetween(args.startDate, args.endDate)], // computed by code, not by the model
+        ["السبب", args.reason || "—"],
+      ]
+    : Object.entries(args).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v]);
+
+  const table = document.createElement("table");
+  for (const [label, value] of rows) {
+    const tr = table.insertRow();
+    const th = document.createElement("th");
+    th.textContent = label;
+    const td = tr.insertCell();
+    td.dir = "auto";
+    td.textContent = value ?? "—";
+    tr.prepend(th);
+  }
+  card.appendChild(table);
+
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const approve = document.createElement("button");
+  approve.className = "btn primary";
+  approve.textContent = "✅ موافق";
+  const reject = document.createElement("button");
+  reject.className = "btn ghost";
+  reject.textContent = "❌ رفض";
+  actions.append(approve, reject);
+  card.appendChild(actions);
+
+  const decide = async (approved) => {
+    if (busy) return;
+    approve.disabled = reject.disabled = true;
+    actions.textContent = approved ? "✅ وافقت" : "❌ رفضت";
+    await streamReply(`/api/conversations/${conversationId}/approvals/${encodeURIComponent(approval.requestId)}`, { approved });
+  };
+  approve.addEventListener("click", () => decide(true));
+  reject.addEventListener("click", () => decide(false));
+
+  reply.el.appendChild(card);
+}
+
+function daysBetween(start, end) {
+  const s = Date.parse(start), e = Date.parse(end);
+  if (Number.isNaN(s) || Number.isNaN(e)) return "?";
+  return Math.round((e - s) / 86_400_000) + 1;
 }
 
 function showError(reply, message) {

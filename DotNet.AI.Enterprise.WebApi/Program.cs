@@ -21,7 +21,12 @@ await app.Services.GetRequiredService<PolicyIndexer>().IndexAsync();
 
 app.UseExceptionHandler();
 app.UseDefaultFiles();   // "/" → wwwroot/index.html
-app.UseStaticFiles();    // serves the test UI from wwwroot
+app.UseStaticFiles(new StaticFileOptions // serves the test UI from wwwroot
+{
+    // "no-cache" = the browser must re-check with the server (cheap 304 if unchanged),
+    // so a new app.js is picked up right away instead of an old cached copy.
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache"
+});
 
 app.MapHrEndpoints();
 

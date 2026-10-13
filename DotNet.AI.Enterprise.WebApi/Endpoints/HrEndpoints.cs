@@ -19,6 +19,7 @@ public static class HrEndpoints
 
         api.MapGet("/info", GetInfo);
         api.MapPost("/conversations/{conversationId:guid}/messages", SendMessage);
+        api.MapPost("/conversations/{conversationId:guid}/approvals/{requestId}", RespondToApproval);
         api.MapDelete("/conversations/{conversationId:guid}", DeleteConversation);
         api.MapPost("/leave-requests/extract", ExtractLeave);
 
@@ -42,16 +43,36 @@ public static class HrEndpoints
         var assistant = store.GetOrCreate(conversationId);
         var logger = loggerFactory.CreateLogger(nameof(HrEndpoints));
 
-        return TypedResults.ServerSentEvents(StreamAnswer(assistant, request.Message, logger, cancellationToken));
+        return TypedResults.ServerSentEvents(
+            StreamAnswer(assistant, assistant.AskStreamingAsync(request.Message, cancellationToken), logger, cancellationToken));
+    }
+
+    /// <summary>
+    /// Human-in-the-loop: the employee clicked Approve or Reject on an "approval" card.
+    /// The agent then continues (runs the tool, or is told it was rejected) and the reply streams back.
+    /// </summary>
+    private static IResult RespondToApproval(
+        Guid conversationId, string requestId, ApprovalDecisionRequest decision, ConversationStore store,
+        ILoggerFactory loggerFactory, CancellationToken cancellationToken)
+    {
+        var assistant = store.GetOrCreate(conversationId);
+        if (!assistant.HasPendingApproval(requestId))
+            return TypedResults.Conflict(new ErrorEvent("This approval request doesn't exist or was already answered."));
+
+        var logger = loggerFactory.CreateLogger(nameof(HrEndpoints));
+
+        return TypedResults.ServerSentEvents(
+            StreamAnswer(assistant, assistant.RespondToApprovalAsync(requestId, decision.Approved, cancellationToken), logger, cancellationToken));
     }
 
     private static async IAsyncEnumerable<SseItem<object>> StreamAnswer(
-        HrAssistant assistant, string message, ILogger logger, [EnumeratorCancellation] CancellationToken cancellationToken)
+        HrAssistant assistant, IAsyncEnumerable<ChatResponseUpdate> source, ILogger logger,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Once streaming starts the HTTP status (200) is already sent, so failures must be
         // reported as an "error" event instead of a 500. C# can't `yield` inside try/catch,
         // hence the manual enumerator.
-        await using var updates = assistant.AskStreamingAsync(message, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        await using var updates = source.GetAsyncEnumerator(cancellationToken);
 
         while (true)
         {
@@ -78,6 +99,11 @@ public static class HrEndpoints
 
             foreach (var call in update.Contents.OfType<FunctionCallContent>())
                 yield return new SseItem<object>(new ToolCallEvent(call.Name, call.Arguments), "tool");
+
+            // The agent paused: the UI must show exactly what will run (the real arguments) and ask the employee.
+            foreach (var approval in update.Contents.OfType<ToolApprovalRequestContent>())
+                if (approval.ToolCall is FunctionCallContent call)
+                    yield return new SseItem<object>(new ApprovalEvent(approval.RequestId, call.Name, call.Arguments), "approval");
 
             if (!string.IsNullOrEmpty(update.Text))
                 yield return new SseItem<object>(new TextEvent(update.Text), "text");

@@ -14,7 +14,8 @@ public sealed class HrTools(
     IEmployeeRepository employees,
     ICurrentUser currentUser,
     TimeProvider time,
-    PolicyRetriever retriever)
+    PolicyRetriever retriever,
+    ILeaveRequestRepository leaveRequests)
 {
     public IList<AITool> AsAITools(bool includePolicySearch = true)
     {
@@ -24,6 +25,10 @@ public sealed class HrTools(
             AIFunctionFactory.Create(GetMyProfile),
             AIFunctionFactory.Create(GetMyLeaveBalance),
             AIFunctionFactory.Create(GetPublicHolidays),
+            // Changes data → the employee must approve every call before it runs (human-in-the-loop).
+#pragma warning disable MEAI001 // ApprovalRequiredAIFunction is still marked experimental
+            new ApprovalRequiredAIFunction(AIFunctionFactory.Create(SubmitLeaveRequest)),
+#pragma warning restore MEAI001
         ];
 
         if (includePolicySearch)
@@ -107,6 +112,42 @@ public sealed class HrTools(
             TotalHolidays = publicHolidays.Count,
             Holidays = publicHolidays
         };
+    }
+
+    [Description("Submits a leave request for the current employee to their manager. " +
+                 "The employee confirms it in the app before it is actually submitted, so call it directly — don't ask for confirmation in text. " +
+                 "Use GetCurrentDate first to turn relative dates into exact ones.")]
+    public async Task<object> SubmitLeaveRequest(
+        [Description("Type of leave.")] LeaveType type,
+        [Description("First day of leave, yyyy-MM-dd.")] DateOnly startDate,
+        [Description("Last day of leave (inclusive), yyyy-MM-dd.")] DateOnly endDate,
+        [Description("Reason in the employee's words. Optional.")] string? reason,
+        CancellationToken cancellationToken)
+    {
+        var me = GetCurrentEmployee();
+        var today = DateOnly.FromDateTime(time.GetLocalNow().Date);
+
+        // Approval means "I want this", not "this is valid": the business rules are checked again
+        // at execution time (the balance may have changed since the request was proposed).
+        var draft = new LeaveRequestDraft(type, startDate, endDate, reason);
+        var errors = draft.Validate(me, today);
+        if (errors.Count > 0)
+            return new { Submitted = false, Errors = errors };
+
+        var request = new LeaveRequest(
+            Id: $"LR-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}",
+            EmployeeId: me.Id,
+            Type: type,
+            StartDate: startDate,
+            EndDate: endDate,
+            Days: draft.Days!.Value,
+            Reason: reason,
+            Status: LeaveRequestStatus.PendingManagerApproval,
+            SubmittedAt: time.GetUtcNow());
+
+        await leaveRequests.AddAsync(request, cancellationToken);
+
+        return new { Submitted = true, request.Id, request.Days, Status = "Waiting for manager approval" };
     }
 
     private Employee GetCurrentEmployee() =>

@@ -14,6 +14,7 @@ public static class Prompts
         - The tools always return the CURRENT employee's data, so it is safe to share it with them.
         - Questions about other employees' data: explain that you can only show the employee their own data.
         - Reply in the same language as the employee's question. Keep answers short.
+        - To request leave for the employee, call SubmitLeaveRequest with exact dates. The app asks the employee to confirm it.
         """;
 
     public const string AgenticPolicyRules = """

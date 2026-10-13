@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IEmployeeRepository, InMemoryEmployeeRepository>();
         services.AddSingleton<ICurrentUser, DemoCurrentUser>();
+        services.AddSingleton<ILeaveRequestRepository, InMemoryLeaveRequestRepository>();
 
         return services;
     }

@@ -68,15 +68,37 @@ public sealed class ChatConsole(HrAssistant assistant, IOptions<AiOptions> optio
 
     private async Task ChatAsync(string prompt, CancellationToken cancellationToken)
     {
+        var pending = await PrintReplyAsync(assistant.AskStreamingAsync(prompt, cancellationToken));
+
+        // Human-in-the-loop: the agent paused before a tool that changes data. Ask the employee for each one.
+        while (pending.Count > 0)
+        {
+            var approval = pending[0];
+            var call = (FunctionCallContent)approval.ToolCall;
+
+            Console.WriteLine($"\n⏸️  [Needs your approval] {call.Name}({FormatArgs(call.Arguments)})");
+            Console.Write("   Approve? (y/n): ");
+            var approved = Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true;
+
+            pending = await PrintReplyAsync(assistant.RespondToApprovalAsync(approval.RequestId, approved, cancellationToken));
+        }
+    }
+
+    /// <summary>Prints a streamed reply and returns any approval requests the agent paused for.</summary>
+    private async Task<List<ToolApprovalRequestContent>> PrintReplyAsync(IAsyncEnumerable<ChatResponseUpdate> updates)
+    {
+        var approvals = new List<ToolApprovalRequestContent>();
         Console.WriteLine($"\n🤖 [HR Assistant]:\n{Separator}");
 
-        await foreach (var update in assistant.AskStreamingAsync(prompt, cancellationToken))
+        await foreach (var update in updates)
         {
             // Make tool calling visible — this is what happens "behind the scenes".
             foreach (var content in update.Contents)
             {
                 if (content is FunctionCallContent call)
                     Console.WriteLine($"🔧 [Tool call] {call.Name}({FormatArgs(call.Arguments)})");
+                else if (content is ToolApprovalRequestContent approval)
+                    approvals.Add(approval);
             }
 
             Console.Write(update.Text);
@@ -84,6 +106,7 @@ public sealed class ChatConsole(HrAssistant assistant, IOptions<AiOptions> optio
 
         Console.WriteLine($"\n{Separator}");
         PrintUsage();
+        return approvals;
     }
 
     private async Task ExtractLeaveAsync(string text, CancellationToken cancellationToken)

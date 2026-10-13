@@ -4,6 +4,7 @@ using DotNet.AI.Enterprise.Application.Options;
 using DotNet.AI.Enterprise.Application.Rag;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace DotNet.AI.Enterprise.Application;
@@ -25,6 +26,8 @@ public sealed class HrAssistant
     private readonly InMemoryChatHistoryProvider _history;
     private readonly PolicyContextProvider? _policyContext;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Dictionary<string, ToolApprovalRequestContent> _pendingApprovals = [];
+    private readonly ILogger<HrAssistant> _logger;
     private AgentSession? _session;
 
     public HrAssistant(
@@ -35,9 +38,11 @@ public sealed class HrAssistant
         TimeProvider time,
         IOptions<AiOptions> options,
         PolicyRetriever retriever,
-        IOptions<RagOptions> ragOptions)
+        IOptions<RagOptions> ragOptions,
+        ILogger<HrAssistant> logger)
     {
         _chatClient = chatClient;
+        _logger = logger;
         _employees = employees;
         _currentUser = currentUser;
         _time = time;
@@ -82,8 +87,31 @@ public sealed class HrAssistant
     public int HistoryCount => _session is null ? 0 : _history.GetMessages(_session).Count;
 
     /// <summary>Streams the answer as it is generated.</summary>
-    public async IAsyncEnumerable<ChatResponseUpdate> AskStreamingAsync(
-        string prompt, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<ChatResponseUpdate> AskStreamingAsync(string prompt, CancellationToken cancellationToken = default) =>
+        RunStreamingAsync(new ChatMessage(ChatRole.User, prompt), cancellationToken);
+
+    public bool HasPendingApproval(string requestId) => _pendingApprovals.ContainsKey(requestId);
+
+    /// <summary>
+    /// Human-in-the-loop: the employee's decision on a tool call the agent paused for.
+    /// Comes from a button in the UI — never from chat text the model could be tricked by.
+    /// </summary>
+    public IAsyncEnumerable<ChatResponseUpdate> RespondToApprovalAsync(
+        string requestId, bool approved, CancellationToken cancellationToken = default)
+    {
+        // An approval is bound to ONE specific call and can be used only once.
+        if (!_pendingApprovals.Remove(requestId, out var request))
+            throw new InvalidOperationException("This approval request doesn't exist or was already answered.");
+
+        _logger.LogInformation("Approval {RequestId} for {Tool}: {Decision}",
+            requestId, (request.ToolCall as FunctionCallContent)?.Name, approved ? "APPROVED" : "REJECTED");
+
+        var response = request.CreateResponse(approved, approved ? null : "The employee rejected this request.");
+        return RunStreamingAsync(new ChatMessage(ChatRole.User, [response]), cancellationToken);
+    }
+
+    private async IAsyncEnumerable<ChatResponseUpdate> RunStreamingAsync(
+        ChatMessage message, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Two requests on the same conversation at once would corrupt the history.
         if (!await _gate.WaitAsync(0, cancellationToken))
@@ -95,9 +123,19 @@ public sealed class HrAssistant
             _session ??= await _agent.CreateSessionAsync(cancellationToken);
 
             var updates = new List<AgentResponseUpdate>();
-            await foreach (var update in _agent.RunStreamingAsync(prompt, _session, cancellationToken: cancellationToken))
+            await foreach (var update in _agent.RunStreamingAsync(message, _session, cancellationToken: cancellationToken))
             {
                 updates.Add(update);
+
+                // The agent paused before a tool that needs approval: remember it until the employee decides.
+                foreach (var request in update.Contents.OfType<ToolApprovalRequestContent>())
+                {
+                    _pendingApprovals[request.RequestId] = request;
+                    var call = request.ToolCall as FunctionCallContent;
+                    _logger.LogInformation("Approval {RequestId} requested for {Tool} with {Arguments}",
+                        request.RequestId, call?.Name, call?.Arguments is null ? "" : string.Join(", ", call.Arguments.Select(a => $"{a.Key}={a.Value}")));
+                }
+
                 yield return update.AsChatResponseUpdate();
             }
 
@@ -138,5 +176,9 @@ public sealed class HrAssistant
     }
 
     /// <summary>A new session = a fresh conversation with no history.</summary>
-    public void ClearHistory() => _session = null;
+    public void ClearHistory()
+    {
+        _session = null;
+        _pendingApprovals.Clear();
+    }
 }

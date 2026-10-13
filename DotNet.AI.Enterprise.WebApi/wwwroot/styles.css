@@ -196,3 +196,19 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .topbar { padding: 10px 16px; }
   .badge { display: none; }
 }
+
+/* ---------- Human-in-the-loop approval card ---------- */
+.approval {
+  border: 1px solid var(--warn);
+  background: var(--warn-bg);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.approval-title { font-weight: 600; }
+.approval table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.approval th, .approval td { text-align: start; padding: 4px 2px; }
+.approval th { color: var(--muted); font-weight: 500; width: 35%; }
+.approval-actions { display: flex; gap: 8px; color: var(--muted); font-size: 14px; }
