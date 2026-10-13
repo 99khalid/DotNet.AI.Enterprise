@@ -26,10 +26,14 @@ public static class Prompts
 
     public const string RouterSystem = """
         Classify the employee's message for an HR app into exactly one intent:
-        - Policy: company rules (leave policy, attendance, remote work, benefits, allowances).
-        - Profile: the employee's own data (leave balance, profile, manager, hire date, public holidays, today's date).
-        - LeaveRequest: the employee wants to submit or request leave.
+        - Policy: what the company RULES say — entitlements, conditions, limits, procedures, benefits, attendance.
+          Questions about a type of leave are Policy: "how many days of maternity leave?", "is overtime paid?",
+          "can I take leave during probation?", "what happens if I ...?".
+        - Profile: the employee's OWN current data — remaining leave balance, profile, manager, hire date,
+          the list of public holidays, today's date.
+        - LeaveRequest: the employee asks to SUBMIT a leave now, usually with dates: "I want leave from ... to ...", "قدّملي إجازة".
         - Other: anything that is not about HR.
+        A question ("can I ...?", "how many ...?", "is it ...?") is Policy or Profile, never LeaveRequest.
         """;
 
     public const string OffTopicReply = "أنا مساعد الموارد البشرية: أقدر أساعدك في رصيدك وبياناتك، وسياسات الشركة، وتقديم طلبات الإجازة. / I can help with your HR data, company policies and leave requests.";

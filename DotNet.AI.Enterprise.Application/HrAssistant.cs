@@ -58,7 +58,7 @@ public sealed class HrAssistant
             ChatOptions = new ChatOptions
             {
                 Instructions = Prompts.ProfileAgentSystem,
-                Temperature = 0.3f,
+                Temperature = options.Value.Temperature,
                 Tools = tools.ProfileTools()
             }
         });
@@ -73,7 +73,7 @@ public sealed class HrAssistant
             ChatOptions = new ChatOptions
             {
                 Instructions = Prompts.PolicyAgentSystem + (alwaysRetrieve ? Prompts.ClassicPolicyRules : Prompts.AgenticPolicyRules),
-                Temperature = 0.3f,
+                Temperature = options.Value.Temperature,
                 Tools = tools.PolicyTools(includePolicySearch: !alwaysRetrieve)
             },
             AIContextProviders = _policyContext is null ? [] : [_policyContext]

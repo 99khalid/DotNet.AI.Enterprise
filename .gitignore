@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Evaluation results and judge cache (dotnet aieval report reads them)
+DotNet.AI.Enterprise.Evaluation/.eval/
+report.html

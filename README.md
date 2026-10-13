@@ -16,7 +16,7 @@ Employees ask about leave balances and company policy in Arabic or English. A ro
                           └─ Other        → fixed reply, no model call
   ```
 
-  - **Hybrid routing** — embeddings first (the message vs. example phrases per intent, no LLM call); only when that isn't confident (low score or two intents too close) does it fall back to the LLM with structured output (`enum Intent`).
+  - **Hybrid routing** — embeddings first (the message vs. example phrases per intent, no LLM call); only when that isn't confident (low score or two intents too close) does it fall back to the LLM with structured output (`enum Intent`). A code rule overrides the LLM when it picks `LeaveRequest` for a message with no date and no request verb (a question about the rules, not a request).
   - **Multi-intent messages** — "I want leave next week, and also what's the remote-work policy?" is split into parts, each routed to its own specialist and answered in order. Splitting is conservative: only when every part is routed confidently and the intents differ.
   - Each agent has its own short instructions, its own tools and its own history (session) — smaller prompts and fewer tool mix-ups with small models.
   - **Privacy guard** — a question naming another employee ("what's Sara's balance?") gets a fixed reply from code and never reaches the model.
@@ -40,6 +40,18 @@ Employees ask about leave balances and company policy in Arabic or English. A ro
   - **Resources** — `hr://policies` (document list) and `hr://policies/{number}` (a full policy document).
   - **Prompts** — `plan_leave(startDate, endDate, type?, reason?)`: checks a planned leave against balance, holidays and policy without submitting it.
   - Logs go to stderr (stdout carries the protocol); tool results keep Arabic unescaped (fewer tokens, easier for the model to read).
+- **Offline evaluation** (`Microsoft.Extensions.AI.Evaluation`) — a golden dataset of 46 questions (Egyptian Arabic, MSA, English; edge cases, questions the policies don't cover, multi-intent messages, and held-out questions written before tuning) runs through the real system, and each stage is scored on its own:
+
+  | Stage | Metrics | How |
+  |---|---|---|
+  | Router | accuracy, confusion matrix, LLM-fallback rate | code |
+  | Retrieval | Hit@K, MRR, "no-answer" rejection | code (embeddings only) |
+  | Leave extraction | field accuracy, exact match | code |
+  | Agents | tool-selection accuracy, fact recall (custom `IEvaluator`) | code |
+  | Answers | groundedness 1–5 (`GroundednessEvaluator`) | LLM judge, stronger than the model under test |
+
+  - Results are compared with a committed `baseline.json`; a quality metric that drops beyond its tolerance is reported as a regression (exit code 1).
+  - Judge responses are cached on disk, so an unchanged answer is never sent to the judge twice; `dotnet aieval report` renders the stored results as an HTML report.
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
 - **Three front ends** sharing the same core: a console app, an ASP.NET Core Web API with a test web UI, and an MCP server.
@@ -55,6 +67,7 @@ DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector 
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
 DotNet.AI.Enterprise.McpServer       MCP server (stdio): tools, resources, prompts
+DotNet.AI.Enterprise.Evaluation      Golden dataset (Data/golden.json), evaluation suites, baseline.json
 ```
 
 Dependencies point inward: `Presentation → Infrastructure → Application → Domain`.
@@ -121,6 +134,20 @@ Any MCP host can start it the same way — e.g. in Claude Desktop's `claude_desk
 
 (Claude Desktop uses `mcpServers` instead of `servers`.) Run the built DLL rather than `dotnet run`: build output on stdout would break the protocol.
 
+### Evaluation
+
+Runs against the local Ollama setup (`qwen2.5:3b`, `bge-m3`, temperature 0, in-memory store — no Docker needed). The judge uses `AI:ApiKey` from User Secrets.
+
+```bash
+dotnet run --project DotNet.AI.Enterprise.Evaluation                      # free: router, retrieval, extraction, tools, facts
+dotnet run --project DotNet.AI.Enterprise.Evaluation -- --judge           # + groundedness graded by Gemini
+dotnet run --project DotNet.AI.Enterprise.Evaluation -- --save-baseline   # accept this run as the new baseline
+dotnet tool restore
+dotnet aieval report -p DotNet.AI.Enterprise.Evaluation/.eval -o report.html
+```
+
+Every bug found becomes a new case in `Data/golden.json`.
+
 ## Configuration
 
 `appsettings.json` → `AI` section:
@@ -166,7 +193,8 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] Leave request workflow (extract → validate → enrich → approve → submit)
 - [x] Multi-agent with a triage router (policy / profile / leave), multi-intent messages
 - [x] MCP server (read-only tools, policy resources, prompts)
-- [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
+- [x] Evaluation: golden dataset, per-stage metrics, LLM judge, baseline and regressions
+- [ ] Advanced RAG (query rewriting, hybrid search, reranking), measured against the baseline
 - [ ] Production: auth, persistence, Docker, observability
 
 ## Notes

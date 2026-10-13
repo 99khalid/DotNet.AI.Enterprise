@@ -38,6 +38,10 @@ public sealed class AiOptions : IValidatableObject
     [Range(2, 200)]
     public int MaxHistoryMessages { get; init; } = 20;
 
+    /// <summary>Sampling temperature of the agents. The evaluation runs with 0 so results are repeatable.</summary>
+    [Range(0, 2)]
+    public float Temperature { get; init; } = 0.3f;
+
     /// <summary>Optional, from the provider's pricing page. When set, the console shows session cost.</summary>
     public decimal? InputCostPerMillionTokens { get; init; }
 

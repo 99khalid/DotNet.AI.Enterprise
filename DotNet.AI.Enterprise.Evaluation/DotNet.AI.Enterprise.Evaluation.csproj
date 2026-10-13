@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline evaluation: runs the golden dataset through the real system and scores each stage. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Shared with the other front ends: the judge reuses the AI:ApiKey secret. -->
+    <UserSecretsId>e93bc397-ec59-4fe2-9b3a-51f5b50035ee</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DotNet.AI.Enterprise.Infrastructure\DotNet.AI.Enterprise.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation.Quality" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation.Reporting" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Data\golden.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

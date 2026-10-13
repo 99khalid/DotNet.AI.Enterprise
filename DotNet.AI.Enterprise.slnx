@@ -2,6 +2,7 @@
   <Project Path="DotNet.AI.Enterprise.Application/DotNet.AI.Enterprise.Application.csproj" />
   <Project Path="DotNet.AI.Enterprise.ConsoleApp/DotNet.AI.Enterprise.ConsoleApp.csproj" />
   <Project Path="DotNet.AI.Enterprise.Domain/DotNet.AI.Enterprise.Domain.csproj" />
+  <Project Path="DotNet.AI.Enterprise.Evaluation/DotNet.AI.Enterprise.Evaluation.csproj" />
   <Project Path="DotNet.AI.Enterprise.Infrastructure/DotNet.AI.Enterprise.Infrastructure.csproj" />
   <Project Path="DotNet.AI.Enterprise.McpServer/DotNet.AI.Enterprise.McpServer.csproj" />
   <Project Path="DotNet.AI.Enterprise.WebApi/DotNet.AI.Enterprise.WebApi.csproj" />

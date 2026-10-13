@@ -46,10 +46,15 @@ public sealed class IntentRouter(
 
     private static readonly Dictionary<Intent, string[]> Examples = new()
     {
+        // Questions ABOUT leave rules ("how many days does the policy give?", "is it allowed?") are Policy,
+        // even though they share words with Profile ("my balance") and LeaveRequest ("I want leave").
         [Intent.Policy] =
         [
             "إيه سياسة الإجازة المرضية؟", "ينفع أشتغل من البيت؟", "لو اتأخرت بيحصل إيه؟", "الشركة بتدفع تأمين طبي؟",
-            "كام يوم إجازة الزواج؟", "بدل المواصلات كام؟", "مواعيد العمل إيه؟", "What is the remote work policy?"
+            "كام يوم إجازة الزواج؟", "بدل المواصلات كام؟", "مواعيد العمل إيه؟", "What is the remote work policy?",
+            "اللائحة بتقول إيه عن الإجازات؟", "شروط الإجازة السنوية إيه؟", "الموظف بيستحق كام يوم إجازة في السنة؟",
+            "هل مسموح آخد إجازة وأنا في فترة الاختبار؟", "إجازة الوضع كام يوم؟", "الإذن بيتخصم من رصيد الإجازات؟",
+            "How many vacation days does the policy give?", "Is sick leave paid?", "رصيد الإجازات بيتجدد إمتى؟"
         ],
         [Intent.Profile] =
         [
@@ -59,7 +64,7 @@ public sealed class IntentRouter(
         [Intent.LeaveRequest] =
         [
             "عايز إجازة من 1 لـ 3 نوفمبر", "قدّملي إجازة سنوية", "اطلبلي أجازة يومين الأسبوع الجاي", "محتاج إجازة مرضية بكرة",
-            "عايز أقدّم طلب إجازة علشان فرح أخويا", "خدلي إجازة من الأحد للتلات", "I want to take annual leave next week", "Request leave from Dec 1 to Dec 3"
+            "عايز أقدّم طلب إجازة علشان فرح أخويا", "خدلي إجازة من الأحد للتلات", "عايز آخد إجازة وضع من أول الشهر", "I want to take annual leave next week", "Request leave from Dec 1 to Dec 3"
         ],
         [Intent.Other] =
         [
@@ -127,9 +132,26 @@ public sealed class IntentRouter(
 
         // Not confident: let the model decide — one small, constrained task (pick one value of an enum).
         var intent = await ClassifyWithModelAsync(question, cancellationToken);
+
+        // Small models pick LeaveRequest for any question that mentions leave ("can I take more than 10 days?").
+        // A real request says WHEN (a date, a day) or starts with a request verb; without either, it is a question about the rules.
+        if (intent == Intent.LeaveRequest && !LeaveRequestSignal.IsMatch(question))
+        {
+            logger.LogInformation("Route \"{Question}\": llm said LeaveRequest without a date or request verb → Policy", question);
+            intent = Intent.Policy;
+        }
+
         logger.LogInformation("Route \"{Question}\" → {Intent} (llm, embeddings unsure) — {Scores}", question, intent, score.Details);
         return new RouteDecision(intent, "llm", Math.Round(score.Value, 3));
     }
+
+    private static readonly Regex LeaveRequestSignal = new(
+        @"\d{1,4}\s*[-/]\s*\d{1,2}" +                                                     // 2026-12-13, 13/12
+        @"|بكر[هة]|بعد بكر[هة]|النهارد[هة]|(الأسبوع|الشهر) (الجاي|القادم)|next (week|month)|tomorrow" +
+        @"|(السبت|الأحد|الحد|الاتنين|الإثنين|التلات|الثلاثاء|الأربع|الخميس|الجمعة)" +
+        @"|(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)" +
+        @"|^\s*(عايز|عاوز|محتاج|قد[ّ]?ملي|اطلبلي|خدلي|I want|I'd like|I need|please|book|request|submit)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Embeddings only: the nearest intent and whether it is confident (high score, clear margin).</summary>
     private async Task<Score> ScoreAsync(string text, CancellationToken cancellationToken)

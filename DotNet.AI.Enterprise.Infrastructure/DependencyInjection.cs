@@ -95,7 +95,7 @@ public static class DependencyInjection
             .ValidateOnStart();
 
         services
-            .AddChatClient(sp => CreateInnerClient(sp.GetRequiredService<IOptions<AiOptions>>().Value))
+            .AddChatClient(sp => CreateChatClient(sp.GetRequiredService<IOptions<AiOptions>>().Value))
             // Middleware pipeline, same for every provider:
             .UseFunctionInvocation() // runs the tools the model asks for, sends results back, loops until a final answer
             .Use(inner => new LanguagePinningChatClient(inner)) // inside the loop: runs on every round trip, incl. after tool results
@@ -104,7 +104,10 @@ public static class DependencyInjection
         return services;
     }
 
-    private static IChatClient CreateInnerClient(AiOptions options) => options.Provider switch
+    /// <summary>
+    /// A plain client for one provider, no middleware. Also used on its own, e.g. as the judge model in the evaluation.
+    /// </summary>
+    public static IChatClient CreateChatClient(AiOptions options) => options.Provider switch
     {
         AiProvider.Gemini => new Google.GenAI.Client(
                 apiKey: options.ApiKey,

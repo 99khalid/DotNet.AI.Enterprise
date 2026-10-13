@@ -1,0 +1,12 @@
+{
+  "Router/Accuracy": 0.9565,
+  "Router/LLM fallback": 0.3696,
+  "Retrieval/Hit@3": 1,
+  "Retrieval/MRR": 0.947,
+  "Retrieval/No-answer rejected": 0.5,
+  "Extraction/Field accuracy": 0.8333,
+  "Extraction/Exact match": 0.5,
+  "Agents/Tool accuracy": 0.8889,
+  "Agents/Fact recall": 0.7576,
+  "Agents/Avg answer time": 8.1369
+}
