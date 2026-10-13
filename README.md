@@ -35,9 +35,14 @@ Employees ask about leave balances and company policy in Arabic or English. A ro
   - The approval card shows balance before/after, public holidays in the range and the relevant policy — all computed by code.
   - Approvals come from a button, never from chat text, and a run can be decided once (`409` on reuse). Business rules are re-validated before submitting.
   - One model call per request instead of several, and no invented fields.
+- **MCP server** (Model Context Protocol, official C# SDK) — the same HR core exposed to any MCP host (VS Code, Claude Desktop, MCP Inspector, other agents) over stdio:
+  - **Tools** — `get_my_leave_balance`, `get_my_profile`, `get_public_holidays`, `get_current_date`, `search_policies`. They are the same `HrTools` methods the agents use (descriptions and JSON schemas come from them), all marked read-only. Submitting leave stays in the workflow, where approval is enforced by code.
+  - **Resources** — `hr://policies` (document list) and `hr://policies/{number}` (a full policy document).
+  - **Prompts** — `plan_leave(startDate, endDate, type?, reason?)`: checks a planned leave against balance, holidays and policy without submitting it.
+  - Logs go to stderr (stdout carries the protocol); tool results keep Arabic unescaped (fewer tokens, easier for the model to read).
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
-- **Two front ends** sharing the same core: a console app and an ASP.NET Core Web API with a test web UI.
+- **Three front ends** sharing the same core: a console app, an ASP.NET Core Web API with a test web UI, and an MCP server.
 
 ## Solution structure
 
@@ -49,6 +54,7 @@ DotNet.AI.Enterprise.Application     HrAssistant (specialist agents), HrTools, P
 DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector stores (in-memory, pgvector), policy documents (Data/Policies), DI wiring
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
+DotNet.AI.Enterprise.McpServer       MCP server (stdio): tools, resources, prompts
 ```
 
 Dependencies point inward: `Presentation → Infrastructure → Application → Domain`.
@@ -88,6 +94,32 @@ The console app reads the same settings:
 ```bash
 dotnet run --project DotNet.AI.Enterprise.ConsoleApp
 ```
+
+### MCP server
+
+Build, then try it with the MCP Inspector (set the same `AI__*`, `Embedding__*`, `Rag__*` and `ConnectionStrings__Policies` values as environment variables in the Inspector):
+
+```bash
+dotnet build DotNet.AI.Enterprise.McpServer
+npx @modelcontextprotocol/inspector dotnet DotNet.AI.Enterprise.McpServer/bin/Debug/net10.0/DotNet.AI.Enterprise.McpServer.dll
+```
+
+Any MCP host can start it the same way — e.g. in Claude Desktop's `claude_desktop_config.json` or VS Code's `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "hr-assistant": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["<repo>/DotNet.AI.Enterprise.McpServer/bin/Debug/net10.0/DotNet.AI.Enterprise.McpServer.dll"],
+      "env": { "DOTNET_ENVIRONMENT": "Development" }
+    }
+  }
+}
+```
+
+(Claude Desktop uses `mcpServers` instead of `servers`.) Run the built DLL rather than `dotnet run`: build output on stdout would break the protocol.
 
 ## Configuration
 
@@ -133,11 +165,11 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] Human-in-the-loop tool approval (`SubmitLeaveRequest`)
 - [x] Leave request workflow (extract → validate → enrich → approve → submit)
 - [x] Multi-agent with a triage router (policy / profile / leave), multi-intent messages
-- [ ] MCP server
+- [x] MCP server (read-only tools, policy resources, prompts)
 - [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
 - [ ] Production: auth, persistence, Docker, observability
 
 ## Notes
 
-- Demo data and a fixed demo user (`DemoCurrentUser`) stand in for a real database and authentication.
+- Demo data and a fixed demo user (`DemoCurrentUser`) stand in for a real database and authentication. The MCP server runs over stdio on the employee's own machine; an HTTP transport would first need a token-based `ICurrentUser`.
 - Check each model's license before commercial use (e.g. `qwen2.5:3b` is research/non-commercial only).
