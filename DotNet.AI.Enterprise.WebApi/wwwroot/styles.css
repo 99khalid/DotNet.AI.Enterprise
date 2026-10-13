@@ -216,3 +216,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 /* ---------- Leave workflow steps ---------- */
 .wf-steps { margin: 0 0 10px; padding-inline-start: 22px; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
 .leave .approval { margin-bottom: 10px; }
+
+/* ---------- Router chip ---------- */
+.tool.route { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.msg .wf-steps, .msg .verdict { margin-top: 4px; }

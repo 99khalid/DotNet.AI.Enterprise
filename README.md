@@ -1,12 +1,26 @@
 # HR Assistant — .NET AI Engineering
 
 An HR assistant built step by step while learning AI engineering in .NET.
-Employees ask about leave balances and company policy in Arabic or English; the assistant answers using tools, and turns free-text leave requests into validated, typed objects.
+Employees ask about leave balances and company policy in Arabic or English. A router sends each question to the right specialist: a profile agent with tools, a policy agent grounded in documents, or a leave-request workflow with human approval.
 
 ## Features
 
 - **Provider-agnostic AI** via `Microsoft.Extensions.AI` (`IChatClient`) — switch between **Google Gemini** and any **OpenAI-compatible** endpoint (OpenAI, **Ollama** for local models) from configuration only.
 - **Agent built with Microsoft Agent Framework** — `ChatClientAgent` on top of the same `IChatClient`: instructions, tools, a per-conversation `AgentSession`, chat history with a message-count reducer, and classic RAG as an `AIContextProvider`.
+- **Multi-agent with a triage router** — `IntentRouter` classifies each message as `Profile`, `Policy`, `LeaveRequest` or `Other`, and the right specialist handles it:
+
+  ```
+  message → IntentRouter ─┬─ Profile      → ProfileAgent (read-only tools: balance, profile, holidays, date)
+                          ├─ Policy       → PolicyAgent  (RAG, no tools that change data)
+                          ├─ LeaveRequest → leave workflow (below)
+                          └─ Other        → fixed reply, no model call
+  ```
+
+  - **Hybrid routing** — embeddings first (the message vs. example phrases per intent, no LLM call); only when that isn't confident (low score or two intents too close) does it fall back to the LLM with structured output (`enum Intent`).
+  - **Multi-intent messages** — "I want leave next week, and also what's the remote-work policy?" is split into parts, each routed to its own specialist and answered in order. Splitting is conservative: only when every part is routed confidently and the intents differ.
+  - Each agent has its own short instructions, its own tools and its own history (session) — smaller prompts and fewer tool mix-ups with small models.
+  - **Privacy guard** — a question naming another employee ("what's Sara's balance?") gets a fixed reply from code and never reaches the model.
+  - The UI and console show the route for every message (intent, method, score).
 - **Function calling** — the model asks for `GetMyLeaveBalance`, `GetMyProfile`, `GetPublicHolidays`, `GetCurrentDate`, `SearchPolicies`; the app runs them. Identity comes from `ICurrentUser`, never from model-supplied parameters.
 - **RAG over HR policy documents** — Markdown policies are chunked per article (with a contextual header), embedded via `IEmbeddingGenerator` (Gemini or Ollama `bge-m3`), and searched by cosine similarity. Answers cite their source, e.g. `[سياسة الإجازات › المادة 1: الإجازة السنوية]`.
   - **Two retrieval modes**: `Agentic` (the model decides when to call `SearchPolicies`) and `Always` (classic RAG — `PolicyContextProvider` retrieves on every question and adds the excerpts to the agent's instructions; more reliable with small models).
@@ -15,14 +29,12 @@ Employees ask about leave balances and company policy in Arabic or English; the 
   - **Incremental indexing** — each chunk stores a SHA-256 hash of its text; on startup only new or changed chunks are embedded, and removed ones are deleted.
   - **One table per embedding model and size** (e.g. `policy_chunks_bge_m3_1024`), so vectors from different models are never mixed.
 - **Structured output** — free text → `LeaveRequestDraft` record, then business rules (balance, 7-day notice, past dates) are validated in code.
-- **Human-in-the-loop approval** — `SubmitLeaveRequest` changes data, so it is wrapped in `ApprovalRequiredAIFunction`: the agent pauses, the UI shows an approval card with the exact arguments (days computed by code), and the tool runs only after the employee clicks Approve.
-  - Approvals come from a button, never from chat text, are bound to one tool call and can be used once (`409` on reuse).
-  - Business rules are re-validated at execution time, and every request/decision is written to an audit log.
-- **Leave request workflow** (Microsoft Agent Framework Workflows) — the code fixes the path and the model does only the language step:
+- **Leave request workflow with human-in-the-loop approval** (Microsoft Agent Framework Workflows) — leave requests typed in the chat are routed here; no agent has a tool that changes data. The code fixes the path and the model does only the language step:
   `Extract (model) → Validate (code) → NeedsInfo | Enrich (code) → ⏸ Approval (human) → Submit (code)`.
   - Conditional edges route invalid requests to `NeedsInfo`; a `RequestPort` pauses the run until the employee approves, and the decision resumes the same run.
   - The approval card shows balance before/after, public holidays in the range and the relevant policy — all computed by code.
-  - One model call per request instead of several, and no invented fields: the agent and the workflow share `LeaveRequestExtractor` and `LeaveRequestService`.
+  - Approvals come from a button, never from chat text, and a run can be decided once (`409` on reuse). Business rules are re-validated before submitting.
+  - One model call per request instead of several, and no invented fields.
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
 - **Two front ends** sharing the same core: a console app and an ASP.NET Core Web API with a test web UI.
@@ -31,7 +43,9 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 
 ```
 DotNet.AI.Enterprise.Domain          Business rules (Employee, LeaveType, LeaveRequestDraft) — no AI
-DotNet.AI.Enterprise.Application     HrAssistant (agent), HrTools, Prompts, options, middleware, Rag/ (chunking, indexing, retrieval, context provider)
+DotNet.AI.Enterprise.Application     HrAssistant (specialist agents), HrTools, Prompts, options, middleware,
+                                     Routing/ (intent router, privacy guard), Leave/ (extractor, rules, workflow),
+                                     Rag/ (chunking, indexing, retrieval, context provider)
 DotNet.AI.Enterprise.Infrastructure  Gemini / OpenAI-compatible clients, vector stores (in-memory, pgvector), policy documents (Data/Policies), DI wiring
 DotNet.AI.Enterprise.ConsoleApp      Console front end
 DotNet.AI.Enterprise.WebApi          Minimal API + SSE streaming + test UI (wwwroot)
@@ -118,7 +132,7 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] Agent with Microsoft Agent Framework (session, history reducer, RAG context provider)
 - [x] Human-in-the-loop tool approval (`SubmitLeaveRequest`)
 - [x] Leave request workflow (extract → validate → enrich → approve → submit)
-- [ ] Multi-agent with a triage router (policy / profile / leave)
+- [x] Multi-agent with a triage router (policy / profile / leave), multi-intent messages
 - [ ] MCP server
 - [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
 - [ ] Production: auth, persistence, Docker, observability

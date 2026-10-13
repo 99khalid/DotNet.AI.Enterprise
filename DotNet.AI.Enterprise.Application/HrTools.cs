@@ -1,4 +1,3 @@
-using DotNet.AI.Enterprise.Application.Leave;
 using DotNet.AI.Enterprise.Application.Rag;
 using DotNet.AI.Enterprise.Domain;
 using Microsoft.Extensions.AI;
@@ -15,28 +14,24 @@ public sealed class HrTools(
     IEmployeeRepository employees,
     ICurrentUser currentUser,
     TimeProvider time,
-    PolicyRetriever retriever,
-    LeaveRequestService leave)
+    PolicyRetriever retriever)
 {
-    public IList<AITool> AsAITools(bool includePolicySearch = true)
-    {
-        List<AITool> tools =
-        [
-            AIFunctionFactory.Create(GetCurrentDate),
-            AIFunctionFactory.Create(GetMyProfile),
-            AIFunctionFactory.Create(GetMyLeaveBalance),
-            AIFunctionFactory.Create(GetPublicHolidays),
-            // Changes data → the employee must approve every call before it runs (human-in-the-loop).
-#pragma warning disable MEAI001 // ApprovalRequiredAIFunction is still marked experimental
-            new ApprovalRequiredAIFunction(AIFunctionFactory.Create(SubmitLeaveRequest)),
-#pragma warning restore MEAI001
-        ];
+    /// <summary>The Profile agent's tools: read-only, the current employee's own data.</summary>
+    public IList<AITool> ProfileTools() =>
+    [
+        AIFunctionFactory.Create(GetCurrentDate),
+        AIFunctionFactory.Create(GetMyProfile),
+        AIFunctionFactory.Create(GetMyLeaveBalance),
+        AIFunctionFactory.Create(GetPublicHolidays),
+    ];
 
-        if (includePolicySearch)
-            tools.Add(AIFunctionFactory.Create(SearchPolicies));
-
-        return tools;
-    }
+    /// <summary>
+    /// The Policy agent's tools: only the search tool, and only in Agentic mode (in Always mode the code
+    /// retrieves before every question). It never gets a tool that changes data — even a prompt
+    /// injection hidden in a document can't make it act.
+    /// </summary>
+    public IList<AITool> PolicyTools(bool includePolicySearch) =>
+        includePolicySearch ? [AIFunctionFactory.Create(SearchPolicies)] : [];
 
     [Description("Returns today's date and day of week. Use it to resolve relative dates like 'tomorrow' or 'next Sunday'.")]
     public string GetCurrentDate()
@@ -68,7 +63,8 @@ public sealed class HrTools(
     public object GetMyLeaveBalance()
     {
         var me = GetCurrentEmployee();
-        return new { AnnualDays = me.AnnualLeaveBalance, SickDays = me.SickLeaveBalance };
+        // The name is returned too, so the model can't present this balance as someone else's.
+        return new { Employee = me.FullName, AnnualDays = me.AnnualLeaveBalance, SickDays = me.SickLeaveBalance };
     }
 
     // RAG: the policy text now comes from documents, not from code.
@@ -94,24 +90,6 @@ public sealed class HrTools(
         TotalHolidays = PublicHolidays.All.Count,
         Holidays = PublicHolidays.All.Select(h => new { Date = h.Date.ToString("yyyy-MM-dd"), h.Name }).ToList()
     };
-
-    [Description("Submits a leave request for the current employee to their manager. " +
-                 "The employee confirms it in the app before it is actually submitted, so call it directly — don't ask for confirmation in text. " +
-                 "Use GetCurrentDate first to turn relative dates into exact ones.")]
-    public async Task<object> SubmitLeaveRequest(
-        [Description("Type of leave.")] LeaveType type,
-        [Description("First day of leave, yyyy-MM-dd.")] DateOnly startDate,
-        [Description("Last day of leave (inclusive), yyyy-MM-dd.")] DateOnly endDate,
-        [Description("Reason in the employee's words. Optional.")] string? reason,
-        CancellationToken cancellationToken)
-    {
-        // Same submit logic as the leave workflow (LeaveRequestService), including re-validation.
-        var (request, errors) = await leave.SubmitAsync(new LeaveRequestDraft(type, startDate, endDate, reason), cancellationToken);
-
-        return request is null
-            ? new { Submitted = false, Errors = errors }
-            : new { Submitted = true, request.Id, request.Days, Status = "Waiting for manager approval" };
-    }
 
     private Employee GetCurrentEmployee() =>
         employees.GetById(currentUser.EmployeeId)

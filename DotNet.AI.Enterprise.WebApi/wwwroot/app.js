@@ -11,11 +11,15 @@ let busy = false;
 
 const SUGGESTIONS = [
   "رصيد إجازاتي كام؟ ومين مديري؟",
+  "عندي كام يوم عطلة؟",
   "إيه سياسة الإجازة المرضية؟",
-  "لو أخدت إجازة من 4 لـ 8 أكتوبر، فيه إجازة رسمية في النص؟",
+  "قدّملي إجازة سنوية من 2026-12-13 لـ 2026-12-14",
   "هات رصيد إجازات سارة",
   "اكتبلي قصيدة عن البحر",
 ];
+
+// Which specialist the router picked — shown as a chip on every answer.
+const ROUTE_LABELS = { Policy: "📚 سياسات", Profile: "👤 بياناتي", LeaveRequest: "📝 طلب إجازة", Other: "💬 خارج الـ HR" };
 
 // ---------- Startup ----------
 
@@ -87,7 +91,8 @@ async function streamReply(url, payload) {
   reply.bubble.classList.add("typing");
 
   let answer = "";
-  let pausedForApproval = false;
+  let isLeaveRequest = false;
+  let steps = null; // workflow steps list, created when a leave request is routed to the workflow
 
   try {
     const res = await fetch(url, {
@@ -103,12 +108,37 @@ async function streamReply(url, payload) {
 
     for await (const { event, data } of readServerSentEvents(res)) {
       switch (event) {
+        case "route": {
+          if (data.intent === "LeaveRequest") isLeaveRequest = true;
+          // Several requests in one message: keep each specialist's answer in its own paragraph.
+          if (data.part && answer) answer += "\n\n";
+          const chip = document.createElement("span");
+          chip.className = "tool route";
+          chip.textContent = `🔀 ${ROUTE_LABELS[data.intent] ?? data.intent} · ${data.method} ${data.score}` +
+            (data.part ? ` ← «${data.part}»` : "");
+          reply.tools.appendChild(chip);
+          break;
+        }
         case "tool":
           addToolChip(reply, data);
           break;
-        case "approval":
-          pausedForApproval = true;
-          addApprovalCard(reply, data);
+        // Leave requests are routed to the workflow: same steps and card as the leave panel.
+        case "step": {
+          if (!steps) {
+            steps = document.createElement("ol");
+            steps.className = "wf-steps";
+            reply.el.appendChild(steps);
+          }
+          const li = document.createElement("li");
+          li.textContent = STEP_LABELS[data.step] ?? data.step;
+          steps.appendChild(li);
+          break;
+        }
+        case "proposal":
+          addProposalCard(reply.el, steps, data);
+          break;
+        case "result":
+          addLeaveResult(reply.el, data);
           break;
         case "text":
           answer += data.delta;
@@ -137,7 +167,7 @@ async function streamReply(url, payload) {
     showError(reply, err.message);
   } finally {
     reply.bubble.classList.remove("typing");
-    if (!answer && pausedForApproval) reply.bubble.textContent = "⏸️ محتاج موافقتك قبل التنفيذ:";
+    if (!answer && isLeaveRequest) reply.bubble.textContent = "📝 طلب إجازة — اتنفّذ كـ Workflow:";
     else if (!answer && !reply.el.querySelector(".error-box")) reply.bubble.textContent = "—";
     setBusy(false);
     inputEl.focus();
@@ -201,71 +231,6 @@ function addToolChip(reply, call) {
 }
 
 const LEAVE_TYPES = { Annual: "سنوية", Sick: "مرضية", Unpaid: "بدون أجر", Other: "أخرى" };
-
-/**
- * Human-in-the-loop card. Shows the EXACT arguments the agent will run with — not the model's
- * own description of them — so the employee approves what really happens.
- */
-function addApprovalCard(reply, approval) {
-  const card = document.createElement("div");
-  card.className = "approval";
-
-  const title = document.createElement("div");
-  title.className = "approval-title";
-  title.textContent = approval.toolName === "SubmitLeaveRequest" ? "📝 تقديم طلب إجازة" : `🔧 ${approval.toolName}`;
-  card.appendChild(title);
-
-  const args = approval.arguments ?? {};
-  const rows = approval.toolName === "SubmitLeaveRequest"
-    ? [
-        ["النوع", LEAVE_TYPES[args.type] ?? args.type],
-        ["من", args.startDate],
-        ["إلى", args.endDate],
-        ["عدد الأيام", daysBetween(args.startDate, args.endDate)], // computed by code, not by the model
-        ["السبب", args.reason || "—"],
-      ]
-    : Object.entries(args).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v]);
-
-  const table = document.createElement("table");
-  for (const [label, value] of rows) {
-    const tr = table.insertRow();
-    const th = document.createElement("th");
-    th.textContent = label;
-    const td = tr.insertCell();
-    td.dir = "auto";
-    td.textContent = value ?? "—";
-    tr.prepend(th);
-  }
-  card.appendChild(table);
-
-  const actions = document.createElement("div");
-  actions.className = "approval-actions";
-  const approve = document.createElement("button");
-  approve.className = "btn primary";
-  approve.textContent = "✅ موافق";
-  const reject = document.createElement("button");
-  reject.className = "btn ghost";
-  reject.textContent = "❌ رفض";
-  actions.append(approve, reject);
-  card.appendChild(actions);
-
-  const decide = async (approved) => {
-    if (busy) return;
-    approve.disabled = reject.disabled = true;
-    actions.textContent = approved ? "✅ وافقت" : "❌ رفضت";
-    await streamReply(`/api/conversations/${conversationId}/approvals/${encodeURIComponent(approval.requestId)}`, { approved });
-  };
-  approve.addEventListener("click", () => decide(true));
-  reject.addEventListener("click", () => decide(false));
-
-  reply.el.appendChild(card);
-}
-
-function daysBetween(start, end) {
-  const s = Date.parse(start), e = Date.parse(end);
-  if (Number.isNaN(s) || Number.isNaN(e)) return "?";
-  return Math.round((e - s) / 86_400_000) + 1;
-}
 
 function showError(reply, message) {
   const box = document.createElement("div");
@@ -344,14 +309,18 @@ $("leaveForm").addEventListener("submit", async (e) => {
   steps.className = "wf-steps";
   out.appendChild(steps);
 
-  await runLeaveWorkflow("/api/leave-requests/workflow/", { text }, out, steps);
+  await runLeaveWorkflow("/api/leave-requests/workflow/", { text }, out, steps, $("leaveBtn"));
 });
 
-/** Streams workflow events: each finished step, then a proposal to approve or a final result. */
-async function runLeaveWorkflow(url, payload, out, steps) {
-  const btn = $("leaveBtn");
-  btn.disabled = true;
-  btn.textContent = "جاري التنفيذ…";
+/**
+ * Streams workflow events: each finished step, then a proposal to approve or a final result.
+ * Used by the leave panel and by approval cards shown in the chat (btn is the panel's button, if any).
+ */
+async function runLeaveWorkflow(url, payload, out, steps, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "جاري التنفيذ…";
+  }
 
   try {
     const res = await fetch(url, {
@@ -372,7 +341,7 @@ async function runLeaveWorkflow(url, payload, out, steps) {
           steps.appendChild(li);
           break;
         }
-        case "approval":
+        case "proposal":
           addProposalCard(out, steps, data);
           break;
         case "result":
@@ -382,12 +351,15 @@ async function runLeaveWorkflow(url, payload, out, steps) {
           addLeaveError(out, data.message);
           break;
       }
+      scrollToBottom();
     }
   } catch (err) {
     addLeaveError(out, err.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "قدّم الطلب";
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "قدّم الطلب";
+    }
   }
 }
 

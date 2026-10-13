@@ -28,8 +28,11 @@ public sealed record TextEvent(string Delta);
 
 public sealed record ErrorEvent(string Message);
 
-/// <summary>The agent paused before a tool that needs the employee's approval.</summary>
-public sealed record ApprovalEvent(string RequestId, string ToolName, IDictionary<string, object?>? Arguments);
+/// <summary>
+/// Which specialist the router picked, and how ("embeddings" or "llm").
+/// Part is the piece of the message it handles — set only when one message held several requests.
+/// </summary>
+public sealed record RouteEvent(string Intent, string Method, double Score, string? Part);
 
 public sealed record SourceDto(string Citation, double Score);
 

@@ -6,7 +6,7 @@ namespace DotNet.AI.Enterprise.WebApi.Endpoints;
 
 /// <summary>
 /// The leave-request workflow over HTTP. Server-Sent Events:
-/// "step" (one per finished step) → "approval" (paused, waiting for the employee) or "result", or "error".
+/// "step" (one per finished step) → "proposal" (paused, waiting for the employee) or "result", or "error".
 /// </summary>
 public static class LeaveWorkflowEndpoints
 {
@@ -45,42 +45,19 @@ public static class LeaveWorkflowEndpoints
         return TypedResults.ServerSentEvents(Stream(workflows.ResumeAsync(runId, decision.Approved, cancellationToken), logger, cancellationToken));
     }
 
-    private static async IAsyncEnumerable<SseItem<object>> Stream(
-        IAsyncEnumerable<LeaveWorkflowUpdate> source, ILogger logger, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static IAsyncEnumerable<SseItem<object>> Stream(
+        IAsyncEnumerable<LeaveWorkflowUpdate> source, ILogger logger, CancellationToken cancellationToken) =>
+        SseStreaming.MapAsync(source, ToEvents, logger, new StrongBox<bool>(), cancellationToken);
+
+    /// <summary>Workflow update → SSE event. Shared with the chat endpoint (leave requests routed from the chat).</summary>
+    internal static IEnumerable<SseItem<object>> ToEvents(LeaveWorkflowUpdate update)
     {
-        // Same pattern as the chat stream: errors after the 200 is sent become an "error" event.
-        await using var updates = source.GetAsyncEnumerator(cancellationToken);
-
-        while (true)
+        yield return update switch
         {
-            LeaveWorkflowUpdate update;
-            string? error = null;
-
-            try
-            {
-                if (!await updates.MoveNextAsync()) break;
-                update = updates.Current;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(ex, "Leave workflow failed");
-                error = ex is OperationCanceledException ? "The AI provider timed out. Try again." : ex.Message;
-                update = null!;
-            }
-
-            if (error is not null)
-            {
-                yield return new SseItem<object>(new ErrorEvent(error), "error");
-                yield break;
-            }
-
-            yield return update switch
-            {
-                LeaveStepCompleted step => new SseItem<object>(step, "step"),
-                LeaveApprovalNeeded approval => new SseItem<object>(approval, "approval"),
-                LeaveWorkflowFinished finished => new SseItem<object>(finished.Result, "result"),
-                _ => new SseItem<object>(update, "unknown")
-            };
-        }
+            LeaveStepCompleted step => new SseItem<object>(step, "step"),
+            LeaveApprovalNeeded approval => new SseItem<object>(approval, "proposal"),
+            LeaveWorkflowFinished finished => new SseItem<object>(finished.Result, "result"),
+            _ => new SseItem<object>(update, "unknown")
+        };
     }
 }

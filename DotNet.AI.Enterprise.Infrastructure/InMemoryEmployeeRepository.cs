@@ -13,4 +13,6 @@ public sealed class InMemoryEmployeeRepository : IEmployeeRepository
     }.ToDictionary(e => e.Id);
 
     public Employee? GetById(string id) => Employees.GetValueOrDefault(id);
+
+    public IReadOnlyCollection<Employee> GetAll() => Employees.Values;
 }

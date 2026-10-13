@@ -1,7 +1,9 @@
 using System.Net.ServerSentEvents;
 using System.Runtime.CompilerServices;
 using DotNet.AI.Enterprise.Application;
+using DotNet.AI.Enterprise.Application.Leave;
 using DotNet.AI.Enterprise.Application.Options;
+using DotNet.AI.Enterprise.Application.Routing;
 using DotNet.AI.Enterprise.WebApi.Conversations;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.AI;
@@ -19,7 +21,6 @@ public static class HrEndpoints
 
         api.MapGet("/info", GetInfo);
         api.MapPost("/conversations/{conversationId:guid}/messages", SendMessage);
-        api.MapPost("/conversations/{conversationId:guid}/approvals/{requestId}", RespondToApproval);
         api.MapDelete("/conversations/{conversationId:guid}", DeleteConversation);
 
         return app;
@@ -29,12 +30,13 @@ public static class HrEndpoints
         new(options.Value.Provider.ToString(), options.Value.Model, employees.GetById(currentUser.EmployeeId)?.FullName ?? "?");
 
     /// <summary>
-    /// Streams the answer as Server-Sent Events: "tool" → "text" (many) → "usage", or "error".
-    /// The browser shows each piece as soon as it arrives.
+    /// Server-Sent Events, per request in the message: "route" (which specialist got it), then either
+    /// the agent's "tool" / "text" / "sources" / "usage", or the leave workflow's "step" / "proposal" / "result".
+    /// A message with two requests ("leave + policy question") produces two routes, handled in order.
     /// </summary>
     private static IResult SendMessage(
-        Guid conversationId, SendMessageRequest request, ConversationStore store, ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken)
+        Guid conversationId, SendMessageRequest request, ConversationStore store, LeaveWorkflowService workflows,
+        ILoggerFactory loggerFactory, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Message) || request.Message.Length > MaxInputLength)
             return TypedResults.BadRequest(new ErrorEvent($"Message must be 1–{MaxInputLength} characters."));
@@ -42,79 +44,70 @@ public static class HrEndpoints
         var assistant = store.GetOrCreate(conversationId);
         var logger = loggerFactory.CreateLogger(nameof(HrEndpoints));
 
-        return TypedResults.ServerSentEvents(
-            StreamAnswer(assistant, assistant.AskStreamingAsync(request.Message, cancellationToken), logger, cancellationToken));
+        return TypedResults.ServerSentEvents(StreamChat(assistant, workflows, request.Message, logger, cancellationToken));
     }
 
-    /// <summary>
-    /// Human-in-the-loop: the employee clicked Approve or Reject on an "approval" card.
-    /// The agent then continues (runs the tool, or is told it was rejected) and the reply streams back.
-    /// </summary>
-    private static IResult RespondToApproval(
-        Guid conversationId, string requestId, ApprovalDecisionRequest decision, ConversationStore store,
-        ILoggerFactory loggerFactory, CancellationToken cancellationToken)
-    {
-        var assistant = store.GetOrCreate(conversationId);
-        if (!assistant.HasPendingApproval(requestId))
-            return TypedResults.Conflict(new ErrorEvent("This approval request doesn't exist or was already answered."));
-
-        var logger = loggerFactory.CreateLogger(nameof(HrEndpoints));
-
-        return TypedResults.ServerSentEvents(
-            StreamAnswer(assistant, assistant.RespondToApprovalAsync(requestId, decision.Approved, cancellationToken), logger, cancellationToken));
-    }
-
-    private static async IAsyncEnumerable<SseItem<object>> StreamAnswer(
-        HrAssistant assistant, IAsyncEnumerable<ChatResponseUpdate> source, ILogger logger,
+    private static async IAsyncEnumerable<SseItem<object>> StreamChat(
+        HrAssistant assistant, LeaveWorkflowService workflows, string message, ILogger logger,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // Once streaming starts the HTTP status (200) is already sent, so failures must be
-        // reported as an "error" event instead of a 500. C# can't `yield` inside try/catch,
-        // hence the manual enumerator.
-        await using var updates = source.GetAsyncEnumerator(cancellationToken);
+        // 1. Route — the router only decides who answers (one route per request in the message).
+        var failed = new StrongBox<bool>();
+        IReadOnlyList<RoutedPart>? parts = null;
+        await foreach (var sse in SseStreaming.MapAsync(RouteOnce(assistant, message, cancellationToken), p =>
+                       {
+                           parts = p;
+                           return [];
+                       }, logger, failed, cancellationToken))
+            yield return sse;
 
-        while (true)
+        if (failed.Value || parts is null) yield break;
+
+        foreach (var part in parts)
         {
-            ChatResponseUpdate update;
-            string? error = null;
-
-            try
-            {
-                if (!await updates.MoveNextAsync()) break;
-                update = updates.Current;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(ex, "Chat request failed");
-                error = ex is OperationCanceledException ? "The AI provider timed out. Try again." : ex.Message;
-                update = null!;
-            }
-
-            if (error is not null)
-            {
-                yield return new SseItem<object>(new ErrorEvent(error), "error");
-                yield break;
-            }
-
-            foreach (var call in update.Contents.OfType<FunctionCallContent>())
-                yield return new SseItem<object>(new ToolCallEvent(call.Name, call.Arguments), "tool");
-
-            // The agent paused: the UI must show exactly what will run (the real arguments) and ask the employee.
-            foreach (var approval in update.Contents.OfType<ToolApprovalRequestContent>())
-                if (approval.ToolCall is FunctionCallContent call)
-                    yield return new SseItem<object>(new ApprovalEvent(approval.RequestId, call.Name, call.Arguments), "approval");
-
-            if (!string.IsNullOrEmpty(update.Text))
-                yield return new SseItem<object>(new TextEvent(update.Text), "text");
-        }
-
-        if (assistant.LastSources.Count > 0)
+            var route = part.Decision;
             yield return new SseItem<object>(
-                new SourcesEvent(assistant.LastSources.Select(s => new SourceDto(s.Chunk.Citation, Math.Round(s.Score, 3))).ToList()),
-                "sources");
+                new RouteEvent(route.Intent.ToString(), route.Method, route.Score, parts.Count > 1 ? part.Text : null), "route");
 
-        yield return new SseItem<object>(
-            UsageDto.From(assistant.LastUsage, assistant.SessionUsage, assistant.HistoryCount), "usage");
+            // 2a. Leave requests always go to the workflow — the model never decides the steps.
+            if (route.Intent == Intent.LeaveRequest)
+            {
+                await foreach (var sse in SseStreaming.MapAsync(workflows.StartAsync(part.Text, cancellationToken), LeaveWorkflowEndpoints.ToEvents, logger, failed, cancellationToken))
+                    yield return sse;
+            }
+            // 2b. Everything else goes to the chosen specialist agent.
+            else
+            {
+                await foreach (var sse in SseStreaming.MapAsync(assistant.AskStreamingAsync(part.Text, route.Intent, cancellationToken), MapAgent, logger, failed, cancellationToken))
+                    yield return sse;
+
+                if (failed.Value) yield break;
+
+                if (assistant.LastSources.Count > 0)
+                    yield return new SseItem<object>(
+                        new SourcesEvent(assistant.LastSources.Select(s => new SourceDto(s.Chunk.Citation, Math.Round(s.Score, 3))).ToList()),
+                        "sources");
+
+                yield return new SseItem<object>(
+                    UsageDto.From(assistant.LastUsage, assistant.SessionUsage, assistant.HistoryCount), "usage");
+            }
+
+            if (failed.Value) yield break;
+        }
+    }
+
+    private static async IAsyncEnumerable<IReadOnlyList<RoutedPart>> RouteOnce(
+        HrAssistant assistant, string message, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        yield return await assistant.RouteAllAsync(message, cancellationToken);
+    }
+    private static IEnumerable<SseItem<object>> MapAgent(ChatResponseUpdate update)
+    {
+        foreach (var call in update.Contents.OfType<FunctionCallContent>())
+            yield return new SseItem<object>(new ToolCallEvent(call.Name, call.Arguments), "tool");
+
+        if (!string.IsNullOrEmpty(update.Text))
+            yield return new SseItem<object>(new TextEvent(update.Text), "text");
     }
 
     private static NoContent DeleteConversation(Guid conversationId, ConversationStore store)

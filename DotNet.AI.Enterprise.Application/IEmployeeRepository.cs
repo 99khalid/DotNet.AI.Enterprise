@@ -5,4 +5,6 @@ namespace DotNet.AI.Enterprise.Application;
 public interface IEmployeeRepository
 {
     Employee? GetById(string id);
+
+    IReadOnlyCollection<Employee> GetAll();
 }

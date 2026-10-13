@@ -1,16 +1,18 @@
 using System.Text;
 using System.Text.Json;
 using DotNet.AI.Enterprise.Application;
+using DotNet.AI.Enterprise.Application.Leave;
 using DotNet.AI.Enterprise.Application.Options;
+using DotNet.AI.Enterprise.Application.Routing;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 namespace DotNet.AI.Enterprise.ConsoleApp.Presentation;
 
 /// <summary>
-/// Console UI only: reads input, prints output. All AI logic lives in HrAssistant.
+/// Console UI only: reads input, prints output. All AI logic lives in HrAssistant and LeaveWorkflowService.
 /// </summary>
-public sealed class ChatConsole(HrAssistant assistant, IOptions<AiOptions> options)
+public sealed class ChatConsole(HrAssistant assistant, LeaveWorkflowService workflows, IOptions<AiOptions> options)
 {
     private const string Separator = "--------------------------------------------------";
 
@@ -68,45 +70,75 @@ public sealed class ChatConsole(HrAssistant assistant, IOptions<AiOptions> optio
 
     private async Task ChatAsync(string prompt, CancellationToken cancellationToken)
     {
-        var pending = await PrintReplyAsync(assistant.AskStreamingAsync(prompt, cancellationToken));
+        // 1. The router picks the specialist — one per request when the message holds several.
+        var parts = await assistant.RouteAllAsync(prompt, cancellationToken);
 
-        // Human-in-the-loop: the agent paused before a tool that changes data. Ask the employee for each one.
-        while (pending.Count > 0)
+        foreach (var part in parts)
         {
-            var approval = pending[0];
-            var call = (FunctionCallContent)approval.ToolCall;
+            var route = part.Decision;
+            Console.WriteLine($"\n🔀 [Route] {route.Intent} ({route.Method}, {route.Score})" +
+                              (parts.Count > 1 ? $" ← \"{part.Text}\"" : ""));
 
-            Console.WriteLine($"\n⏸️  [Needs your approval] {call.Name}({FormatArgs(call.Arguments)})");
-            Console.Write("   Approve? (y/n): ");
-            var approved = Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true;
-
-            pending = await PrintReplyAsync(assistant.RespondToApprovalAsync(approval.RequestId, approved, cancellationToken));
+            // 2a. Leave requests always run as the workflow.
+            if (route.Intent == Intent.LeaveRequest)
+                await RunLeaveWorkflowAsync(workflows.StartAsync(part.Text, cancellationToken), cancellationToken);
+            // 2b. Everything else: the chosen specialist agent answers.
+            else
+                await AnswerAsync(part.Text, route.Intent, cancellationToken);
         }
     }
 
-    /// <summary>Prints a streamed reply and returns any approval requests the agent paused for.</summary>
-    private async Task<List<ToolApprovalRequestContent>> PrintReplyAsync(IAsyncEnumerable<ChatResponseUpdate> updates)
+    private async Task AnswerAsync(string prompt, Intent intent, CancellationToken cancellationToken)
     {
-        var approvals = new List<ToolApprovalRequestContent>();
-        Console.WriteLine($"\n🤖 [HR Assistant]:\n{Separator}");
+        Console.WriteLine($"🤖 [HR Assistant]:\n{Separator}");
 
-        await foreach (var update in updates)
+        await foreach (var update in assistant.AskStreamingAsync(prompt, intent, cancellationToken))
         {
             // Make tool calling visible — this is what happens "behind the scenes".
-            foreach (var content in update.Contents)
-            {
-                if (content is FunctionCallContent call)
-                    Console.WriteLine($"🔧 [Tool call] {call.Name}({FormatArgs(call.Arguments)})");
-                else if (content is ToolApprovalRequestContent approval)
-                    approvals.Add(approval);
-            }
+            foreach (var call in update.Contents.OfType<FunctionCallContent>())
+                Console.WriteLine($"🔧 [Tool call] {call.Name}({FormatArgs(call.Arguments)})");
 
             Console.Write(update.Text);
         }
 
         Console.WriteLine($"\n{Separator}");
+        foreach (var source in assistant.LastSources)
+            Console.WriteLine($"📄 {source.Chunk.Citation} ({source.Score:0.000})");
         PrintUsage();
-        return approvals;
+    }
+
+    /// <summary>Prints the workflow's steps; when it pauses for approval, asks y/n and resumes it.</summary>
+    private async Task RunLeaveWorkflowAsync(IAsyncEnumerable<LeaveWorkflowUpdate> updates, CancellationToken cancellationToken)
+    {
+        LeaveApprovalNeeded? pending = null;
+
+        await foreach (var update in updates)
+        {
+            switch (update)
+            {
+                case LeaveStepCompleted step:
+                    Console.WriteLine($"   ✔ {step.Step}");
+                    break;
+                case LeaveApprovalNeeded approval:
+                    pending = approval;
+                    break;
+                case LeaveWorkflowFinished { Result: var result }:
+                    Console.WriteLine($"\n{(result.Submitted ? "✅" : "⚠️")} {result.Message}");
+                    foreach (var problem in result.Problems) Console.WriteLine($"   • {problem}");
+                    break;
+            }
+        }
+
+        if (pending is null) return;
+
+        var p = pending.Proposal;
+        Console.WriteLine($"\n⏸️  [Review] {p.Type} {p.StartDate:yyyy-MM-dd} → {p.EndDate:yyyy-MM-dd} ({p.Days} days)" +
+                          $" | reason: {p.Reason ?? "—"} | balance: {p.BalanceBefore} → {p.BalanceAfter?.ToString() ?? "—"}" +
+                          $" | holidays: {(p.HolidaysInRange.Count == 0 ? "none" : string.Join(", ", p.HolidaysInRange))}");
+        Console.Write("   Submit? (y/n): ");
+        var approved = Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true;
+
+        await RunLeaveWorkflowAsync(workflows.ResumeAsync(pending.RunId, approved, cancellationToken), cancellationToken);
     }
 
     private async Task ExtractLeaveAsync(string text, CancellationToken cancellationToken)
