@@ -212,3 +212,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .approval th, .approval td { text-align: start; padding: 4px 2px; }
 .approval th { color: var(--muted); font-weight: 500; width: 35%; }
 .approval-actions { display: flex; gap: 8px; color: var(--muted); font-size: 14px; }
+
+/* ---------- Leave workflow steps ---------- */
+.wf-steps { margin: 0 0 10px; padding-inline-start: 22px; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.leave .approval { margin-bottom: 10px; }

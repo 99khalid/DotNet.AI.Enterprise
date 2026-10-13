@@ -1,3 +1,4 @@
+using DotNet.AI.Enterprise.Application.Leave;
 using DotNet.AI.Enterprise.Application.Rag;
 using DotNet.AI.Enterprise.Domain;
 using Microsoft.Extensions.AI;
@@ -15,7 +16,7 @@ public sealed class HrTools(
     ICurrentUser currentUser,
     TimeProvider time,
     PolicyRetriever retriever,
-    ILeaveRequestRepository leaveRequests)
+    LeaveRequestService leave)
 {
     public IList<AITool> AsAITools(bool includePolicySearch = true)
     {
@@ -87,32 +88,12 @@ public sealed class HrTools(
             .ToList();
     }
     [Description("Returns the list of public holidays for the current year.")]
-    public object GetPublicHolidays()
+    public object GetPublicHolidays() => new
     {
-        // قائمة الإجازات الرسمية (يمكن جلبها من Database أو External API)
-        var publicHolidays = new List<object>
-    {
-        new { Date = "2026-01-07", Name = "Coptic Christmas Day" },
-        new { Date = "2026-01-25", Name = "January 25th Revolution / Police Day" },
-        new { Date = "2026-03-21", Name = "Eid Al-Fitr" },
-        new { Date = "2026-04-13", Name = "Sham El-Nessim" },
-        new { Date = "2026-04-25", Name = "Sinai Liberation Day" },
-        new { Date = "2026-05-01", Name = "Labor Day" },
-        new { Date = "2026-05-27", Name = "Eid Al-Adha" },
-        new { Date = "2026-06-18", Name = "Islamic New Year" },
-        new { Date = "2026-06-30", Name = "June 30 Revolution" },
-        new { Date = "2026-07-23", Name = "Revolution Day (July 23)" },
-        new { Date = "2026-08-27", Name = "Prophet Muhammad's Birthday" },
-        new { Date = "2026-10-06", Name = "Armed Forces Day" }
+        Year = 2026,
+        TotalHolidays = PublicHolidays.All.Count,
+        Holidays = PublicHolidays.All.Select(h => new { Date = h.Date.ToString("yyyy-MM-dd"), h.Name }).ToList()
     };
-
-        return new
-        {
-            Year = 2026,
-            TotalHolidays = publicHolidays.Count,
-            Holidays = publicHolidays
-        };
-    }
 
     [Description("Submits a leave request for the current employee to their manager. " +
                  "The employee confirms it in the app before it is actually submitted, so call it directly — don't ask for confirmation in text. " +
@@ -124,30 +105,12 @@ public sealed class HrTools(
         [Description("Reason in the employee's words. Optional.")] string? reason,
         CancellationToken cancellationToken)
     {
-        var me = GetCurrentEmployee();
-        var today = DateOnly.FromDateTime(time.GetLocalNow().Date);
+        // Same submit logic as the leave workflow (LeaveRequestService), including re-validation.
+        var (request, errors) = await leave.SubmitAsync(new LeaveRequestDraft(type, startDate, endDate, reason), cancellationToken);
 
-        // Approval means "I want this", not "this is valid": the business rules are checked again
-        // at execution time (the balance may have changed since the request was proposed).
-        var draft = new LeaveRequestDraft(type, startDate, endDate, reason);
-        var errors = draft.Validate(me, today);
-        if (errors.Count > 0)
-            return new { Submitted = false, Errors = errors };
-
-        var request = new LeaveRequest(
-            Id: $"LR-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}",
-            EmployeeId: me.Id,
-            Type: type,
-            StartDate: startDate,
-            EndDate: endDate,
-            Days: draft.Days!.Value,
-            Reason: reason,
-            Status: LeaveRequestStatus.PendingManagerApproval,
-            SubmittedAt: time.GetUtcNow());
-
-        await leaveRequests.AddAsync(request, cancellationToken);
-
-        return new { Submitted = true, request.Id, request.Days, Status = "Waiting for manager approval" };
+        return request is null
+            ? new { Submitted = false, Errors = errors }
+            : new { Submitted = true, request.Id, request.Days, Status = "Waiting for manager approval" };
     }
 
     private Employee GetCurrentEmployee() =>

@@ -1,4 +1,3 @@
-using DotNet.AI.Enterprise.Domain;
 using Microsoft.Extensions.AI;
 
 namespace DotNet.AI.Enterprise.WebApi.Endpoints;
@@ -7,7 +6,7 @@ namespace DotNet.AI.Enterprise.WebApi.Endpoints;
 
 public sealed record SendMessageRequest(string Message);
 
-public sealed record ExtractLeaveRequest(string Text);
+public sealed record StartLeaveWorkflowRequest(string Text);
 
 public sealed record ApprovalDecisionRequest(bool Approved);
 
@@ -20,8 +19,6 @@ public sealed record UsageDto(long? InputTokens, long? OutputTokens, long? Total
     public static UsageDto From(UsageDetails? last, UsageDetails session, int historyCount) =>
         new(last?.InputTokenCount, last?.OutputTokenCount, last?.TotalTokenCount, session.TotalTokenCount, historyCount);
 }
-
-public sealed record ExtractLeaveResponse(LeaveRequestDraft? Draft, IReadOnlyList<string> Errors, UsageDto Usage); // Draft includes the computed Days
 
 // ---- Server-Sent Event payloads (one event per item while the answer streams) ----
 

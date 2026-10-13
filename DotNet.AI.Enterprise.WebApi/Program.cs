@@ -29,5 +29,6 @@ app.UseStaticFiles(new StaticFileOptions // serves the test UI from wwwroot
 });
 
 app.MapHrEndpoints();
+app.MapLeaveWorkflowEndpoints();
 
 app.Run();

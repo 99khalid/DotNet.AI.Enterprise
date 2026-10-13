@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using DotNet.AI.Enterprise.Domain;
+using DotNet.AI.Enterprise.Application.Leave;
 using DotNet.AI.Enterprise.Application.Options;
 using DotNet.AI.Enterprise.Application.Rag;
 using Microsoft.Agents.AI;
@@ -17,10 +18,8 @@ namespace DotNet.AI.Enterprise.Application;
 /// </summary>
 public sealed class HrAssistant
 {
-    private readonly IChatClient _chatClient;
-    private readonly IEmployeeRepository _employees;
-    private readonly ICurrentUser _currentUser;
-    private readonly TimeProvider _time;
+    private readonly LeaveRequestExtractor _extractor;
+    private readonly LeaveRequestService _leave;
 
     private readonly AIAgent _agent;
     private readonly InMemoryChatHistoryProvider _history;
@@ -33,19 +32,16 @@ public sealed class HrAssistant
     public HrAssistant(
         IChatClient chatClient,
         HrTools tools,
-        IEmployeeRepository employees,
-        ICurrentUser currentUser,
-        TimeProvider time,
+        LeaveRequestExtractor extractor,
+        LeaveRequestService leave,
         IOptions<AiOptions> options,
         PolicyRetriever retriever,
         IOptions<RagOptions> ragOptions,
         ILogger<HrAssistant> logger)
     {
-        _chatClient = chatClient;
+        _extractor = extractor;
+        _leave = leave;
         _logger = logger;
-        _employees = employees;
-        _currentUser = currentUser;
-        _time = time;
 
         var alwaysRetrieve = ragOptions.Value.Mode == RetrievalMode.Always;
 
@@ -153,26 +149,12 @@ public sealed class HrAssistant
     public async Task<(LeaveRequestDraft? Draft, IReadOnlyList<string> Errors)> ExtractLeaveRequestAsync(
         string text, CancellationToken cancellationToken = default)
     {
-        var today = DateOnly.FromDateTime(_time.GetLocalNow().Date);
+        var (draft, usage) = await _extractor.ExtractAsync(text, cancellationToken);
 
-        List<ChatMessage> messages =
-        [
-            new(ChatRole.System, string.Format(Prompts.LeaveExtractionSystem, today.ToString("yyyy-MM-dd (dddd)"))),
-            new(ChatRole.User, text)
-        ];
+        LastUsage = usage;
+        if (usage is not null) SessionUsage.Add(usage);
 
-        // Temperature 0: extraction must be deterministic, no creativity.
-        var response = await _chatClient.GetResponseAsync<LeaveRequestDraft>(
-            messages, new ChatOptions { Temperature = 0 }, cancellationToken: cancellationToken);
-
-        LastUsage = response.Usage;
-        if (response.Usage is not null) SessionUsage.Add(response.Usage);
-
-        if (!response.TryGetResult(out var draft))
-            return (null, ["الموديل رجّع رد مش مطابق للشكل المطلوب."]);
-
-        var me = _employees.GetById(_currentUser.EmployeeId)!;
-        return (draft, draft.Validate(me, today));
+        return (draft, _leave.Validate(draft));
     }
 
     /// <summary>A new session = a fresh conversation with no history.</summary>

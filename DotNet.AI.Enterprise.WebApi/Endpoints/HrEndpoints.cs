@@ -21,7 +21,6 @@ public static class HrEndpoints
         api.MapPost("/conversations/{conversationId:guid}/messages", SendMessage);
         api.MapPost("/conversations/{conversationId:guid}/approvals/{requestId}", RespondToApproval);
         api.MapDelete("/conversations/{conversationId:guid}", DeleteConversation);
-        api.MapPost("/leave-requests/extract", ExtractLeave);
 
         return app;
     }
@@ -122,17 +121,5 @@ public static class HrEndpoints
     {
         store.Remove(conversationId);
         return TypedResults.NoContent();
-    }
-
-    private static async Task<IResult> ExtractLeave(
-        ExtractLeaveRequest request, HrAssistant assistant, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(request.Text) || request.Text.Length > MaxInputLength)
-            return TypedResults.BadRequest(new ErrorEvent($"Text must be 1–{MaxInputLength} characters."));
-
-        var (draft, errors) = await assistant.ExtractLeaveRequestAsync(request.Text, cancellationToken);
-
-        return TypedResults.Ok(new ExtractLeaveResponse(
-            draft, errors, UsageDto.From(assistant.LastUsage, assistant.SessionUsage, 0)));
     }
 }

@@ -321,50 +321,95 @@ function renderMarkdown(text) {
   return html.join("");
 }
 
-// ---------- Leave request (Structured Output) ----------
+// ---------- Leave request (Workflow) ----------
+// The panel runs the leave WORKFLOW: the code fixes the steps, the model only extracts the data.
+
+const STEP_LABELS = {
+  Extract: "🤖 استخراج البيانات من الكلام",
+  Validate: "✔️ مراجعة قواعد الإجازات",
+  NeedsInfo: "⚠️ الطلب محتاج تعديل",
+  Enrich: "📊 الرصيد والإجازات الرسمية والسياسة",
+  Submit: "📨 تقديم الطلب",
+};
 
 $("leaveForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("leaveText").value.trim();
   if (!text) return;
 
-  const btn = $("leaveBtn");
   const out = $("leaveResult");
-  btn.disabled = true;
-  btn.textContent = "جاري الاستخراج…";
   out.hidden = false;
-  out.textContent = "";
+  out.innerHTML = "";
+  const steps = document.createElement("ol");
+  steps.className = "wf-steps";
+  out.appendChild(steps);
 
-  try {
-    const res = await fetch("/api/leave-requests/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.message || body.title || `HTTP ${res.status}`);
-    renderLeave(out, body);
-  } catch (err) {
-    out.innerHTML = "";
-    const box = document.createElement("div");
-    box.className = "error-box";
-    box.textContent = `❌ ${err.message}`;
-    out.appendChild(box);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "استخرج الطلب";
-  }
+  await runLeaveWorkflow("/api/leave-requests/workflow/", { text }, out, steps);
 });
 
-function renderLeave(out, { draft, errors, usage }) {
-  out.innerHTML = "";
+/** Streams workflow events: each finished step, then a proposal to approve or a final result. */
+async function runLeaveWorkflow(url, payload, out, steps) {
+  const btn = $("leaveBtn");
+  btn.disabled = true;
+  btn.textContent = "جاري التنفيذ…";
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || `HTTP ${res.status}`);
+    }
+
+    for await (const { event, data } of readServerSentEvents(res)) {
+      switch (event) {
+        case "step": {
+          const li = document.createElement("li");
+          li.textContent = STEP_LABELS[data.step] ?? data.step;
+          steps.appendChild(li);
+          break;
+        }
+        case "approval":
+          addProposalCard(out, steps, data);
+          break;
+        case "result":
+          addLeaveResult(out, data);
+          break;
+        case "error":
+          addLeaveError(out, data.message);
+          break;
+      }
+    }
+  } catch (err) {
+    addLeaveError(out, err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "قدّم الطلب";
+  }
+}
+
+/** Human-in-the-loop: everything shown here was computed by code from the extracted data. */
+function addProposalCard(out, steps, { runId, proposal: p }) {
+  const card = document.createElement("div");
+  card.className = "approval";
+
+  const title = document.createElement("div");
+  title.className = "approval-title";
+  title.textContent = "⏸️ راجع الطلب قبل التقديم";
+  card.appendChild(title);
 
   const rows = [
-    ["النوع", draft?.type],
-    ["من", draft?.startDate],
-    ["إلى", draft?.endDate],
-    ["عدد الأيام", draft?.days],
-    ["السبب", draft?.reason],
+    ["النوع", LEAVE_TYPES[p.type] ?? p.type],
+    ["من", p.startDate],
+    ["إلى", p.endDate],
+    ["عدد الأيام", p.days],
+    ["السبب", p.reason || "—"],
+    ["الرصيد", p.balanceAfter === null ? `${p.balanceBefore}` : `${p.balanceBefore} ← ${p.balanceAfter}`],
+    ["إجازات رسمية في الفترة", p.holidaysInRange.length ? p.holidaysInRange.join("، ") : "مفيش"],
+    ["السياسة", p.policy ?? "—"],
   ];
 
   const table = document.createElement("table");
@@ -374,35 +419,56 @@ function renderLeave(out, { draft, errors, usage }) {
     th.textContent = label;
     const td = tr.insertCell();
     td.dir = "auto";
-    if (value === null || value === undefined) {
-      td.textContent = "null";
-      td.className = "null";
-    } else {
-      td.textContent = value;
-    }
+    td.textContent = value;
     tr.prepend(th);
   }
-  out.appendChild(table);
+  card.appendChild(table);
 
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.className = "btn primary";
+  approve.textContent = "✅ قدّم الطلب";
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "btn ghost";
+  reject.textContent = "❌ إلغاء";
+  actions.append(approve, reject);
+  card.appendChild(actions);
+
+  const decide = async (approved) => {
+    approve.disabled = reject.disabled = true;
+    actions.textContent = approved ? "✅ وافقت" : "❌ لغيت";
+    await runLeaveWorkflow(`/api/leave-requests/workflow/${encodeURIComponent(runId)}/decision`, { approved }, out, steps);
+  };
+  approve.addEventListener("click", () => decide(true));
+  reject.addEventListener("click", () => decide(false));
+
+  out.appendChild(card);
+}
+
+function addLeaveResult(out, result) {
   const verdict = document.createElement("div");
   verdict.className = "verdict";
-  if (!errors.length) {
-    const ok = document.createElement("div");
-    ok.className = "ok";
-    ok.textContent = "✅ الطلب سليم وجاهز للإرسال.";
-    verdict.appendChild(ok);
-  }
-  for (const msg of errors) {
+
+  const main = document.createElement("div");
+  main.className = result.submitted ? "ok" : "warn";
+  main.textContent = result.message;
+  verdict.appendChild(main);
+
+  for (const problem of result.problems) {
     const w = document.createElement("div");
     w.className = "warn";
-    w.textContent = `⚠️ ${msg}`;
+    w.textContent = `• ${problem}`;
     verdict.appendChild(w);
   }
   out.appendChild(verdict);
+}
 
-  const u = document.createElement("div");
-  u.className = "usage";
-  u.style.marginTop = "8px";
-  u.textContent = `in: ${usage.inputTokens ?? 0} · out: ${usage.outputTokens ?? 0}`;
-  out.appendChild(u);
+function addLeaveError(out, message) {
+  const box = document.createElement("div");
+  box.className = "error-box";
+  box.textContent = `❌ ${message}`;
+  out.appendChild(box);
 }

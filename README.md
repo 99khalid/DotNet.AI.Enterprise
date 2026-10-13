@@ -18,6 +18,11 @@ Employees ask about leave balances and company policy in Arabic or English; the 
 - **Human-in-the-loop approval** — `SubmitLeaveRequest` changes data, so it is wrapped in `ApprovalRequiredAIFunction`: the agent pauses, the UI shows an approval card with the exact arguments (days computed by code), and the tool runs only after the employee clicks Approve.
   - Approvals come from a button, never from chat text, are bound to one tool call and can be used once (`409` on reuse).
   - Business rules are re-validated at execution time, and every request/decision is written to an audit log.
+- **Leave request workflow** (Microsoft Agent Framework Workflows) — the code fixes the path and the model does only the language step:
+  `Extract (model) → Validate (code) → NeedsInfo | Enrich (code) → ⏸ Approval (human) → Submit (code)`.
+  - Conditional edges route invalid requests to `NeedsInfo`; a `RequestPort` pauses the run until the employee approves, and the decision resumes the same run.
+  - The approval card shows balance before/after, public holidays in the range and the relevant policy — all computed by code.
+  - One model call per request instead of several, and no invented fields: the agent and the workflow share `LeaveRequestExtractor` and `LeaveRequestService`.
 - **Streaming** responses (Server-Sent Events) with visible tool calls and token usage.
 - **Middleware pipeline** — function invocation, logging, and a language-pinning middleware that keeps small models answering in Arabic after tool calls.
 - **Two front ends** sharing the same core: a console app and an ASP.NET Core Web API with a test web UI.
@@ -112,7 +117,8 @@ The `Ollama` launch profile runs fully local: chat `qwen2.5:3b`, embeddings `bge
 - [x] Persistent vector database (PostgreSQL + pgvector, incremental indexing)
 - [x] Agent with Microsoft Agent Framework (session, history reducer, RAG context provider)
 - [x] Human-in-the-loop tool approval (`SubmitLeaveRequest`)
-- [ ] Workflows and multi-agent (triage → policy / leave agents)
+- [x] Leave request workflow (extract → validate → enrich → approve → submit)
+- [ ] Multi-agent with a triage router (policy / profile / leave)
 - [ ] MCP server
 - [ ] Advanced RAG (query rewriting, hybrid search, reranking) + evaluation
 - [ ] Production: auth, persistence, Docker, observability

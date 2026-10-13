@@ -37,13 +37,13 @@
       </form>
     </section>
 
-    <!-- Structured Output: free text → typed leave request -->
-    <aside class="panel leave" aria-label="Leave request extraction">
-      <h2>طلب إجازة <span class="tag">Structured Output</span></h2>
+    <!-- Workflow: the code runs the steps, the model only extracts the data -->
+    <aside class="panel leave" aria-label="Leave request workflow">
+      <h2>طلب إجازة <span class="tag">Workflow</span></h2>
       <form id="leaveForm">
         <textarea id="leaveText" rows="3" dir="auto" maxlength="4000"
                   placeholder="مثال: عايز إجازة سنوية من 1 نوفمبر لـ 3 نوفمبر علشان فرح أخويا" required></textarea>
-        <button class="btn primary" id="leaveBtn" type="submit">استخرج الطلب</button>
+        <button class="btn primary" id="leaveBtn" type="submit">قدّم الطلب</button>
       </form>
       <div id="leaveResult" class="leave-result" hidden></div>
     </aside>
